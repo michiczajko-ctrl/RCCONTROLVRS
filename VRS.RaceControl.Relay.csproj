@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <OutputType>Exe</OutputType>
+    <!-- Allow deploying as single Linux binary on Railway/Render -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VRS.RaceControl.Shared\VRS.RaceControl.Shared.csproj" />
+  </ItemGroup>
+
+</Project>
