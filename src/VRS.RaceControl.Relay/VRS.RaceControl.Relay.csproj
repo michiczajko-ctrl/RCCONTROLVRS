@@ -8,4 +8,9 @@
     <!-- Allow deploying as single Linux binary on Railway/Render -->
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\VRS.RaceControl.Shared\VRS.RaceControl.Shared.csproj" />
+  </ItemGroup>
+
 </Project>
+

@@ -1,8 +1,9 @@
 [build]
 builder = "nixpacks"
+buildCommand = "dotnet publish src/VRS.RaceControl.Relay/VRS.RaceControl.Relay.csproj -c Release -o publish"
 
 [deploy]
-startCommand = "dotnet VRS.RaceControl.Relay.dll"
+startCommand = "dotnet publish/VRS.RaceControl.Relay.dll"
 healthcheckPath = "/health"
 healthcheckTimeout = 100
 restartPolicyType = "on_failure"

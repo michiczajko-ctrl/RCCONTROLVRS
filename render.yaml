@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: rccontrolvrs
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: DOTNET_gcServer
+        value: "0"
+      - key: DOTNET_GCHeapHardLimitPercent
+        value: "0x3C"
+      - key: DOTNET_GCConserveMemory
+        value: "9"
+      - key: DOTNET_EnableDiagnostics
+        value: "0"
+      - key: VRS_MAX_SESSIONS
+        value: "16"
+      - key: VRS_MAX_CLIENTS_PER_SESSION
+        value: "64"
+      - key: VRS_MAX_CONNECTIONS
+        value: "192"
+      - key: VRS_MAX_MESSAGE_BYTES
+        value: "262144"
+      - key: VRS_MEMORY_REJECT_MB
+        value: "440"
+      - key: VRS_MEMORY_HEALTH_MB
+        value: "480"
