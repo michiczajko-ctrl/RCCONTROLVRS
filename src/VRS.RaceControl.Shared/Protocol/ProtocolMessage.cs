@@ -163,4 +163,3 @@ public class ProtocolMessage
         return JsonSerializer.Deserialize<T>(Payload.Value.GetRawText(), s_options);
     }
 }
-

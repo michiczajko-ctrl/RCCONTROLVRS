@@ -179,4 +179,3 @@ public sealed class RelayMessageAccumulator
 
     public string ToUtf8String() => Encoding.UTF8.GetString(_buffer.WrittenSpan);
 }
-

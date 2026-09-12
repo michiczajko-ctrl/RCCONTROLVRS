@@ -3,7 +3,7 @@ services:
     name: rccontrolvrs
     runtime: docker
     plan: free
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./src/VRS.RaceControl.Relay/Dockerfile
     dockerContext: .
     healthCheckPath: /health
     envVars:
@@ -27,3 +27,15 @@ services:
         value: "440"
       - key: VRS_MEMORY_HEALTH_MB
         value: "480"
+      - key: VRS_REQUIRE_TLS
+        value: "true"
+      - key: VRS_TRUST_PROXY_HEADERS
+        value: "true"
+      - key: VRS_ALLOW_LEGACY_JOIN
+        value: "false"
+      - key: VRS_SESSION_TOKEN_ISSUER
+        value: "vrs-race-control-edge"
+      - key: VRS_SESSION_TOKEN_AUDIENCE
+        value: "vrs-race-control-relay"
+      - key: VRS_SESSION_SIGNING_KEY
+        sync: false

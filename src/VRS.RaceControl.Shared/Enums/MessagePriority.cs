@@ -17,4 +17,3 @@ public enum MessagePriority
     SafetyCar = 9, // Safety Car
     RedFlag = 10   // Red Flag - highest priority
 }
-

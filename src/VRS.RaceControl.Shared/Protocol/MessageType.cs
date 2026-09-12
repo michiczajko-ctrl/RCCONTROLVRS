@@ -146,6 +146,38 @@ public enum MessageType
     TeamContractOfferRequest,
 
     /// <summary>HOST's immediate response to a TeamContractOfferRequest.</summary>
-    TeamContractOfferResult
-}
+    TeamContractOfferResult,
 
+    /// <summary>Authoritative persistent track-light and Fast Lane state.</summary>
+    RaceControlPanelState,
+
+    /// <summary>Driver asks the HOST for a monotonic timeline-clock sample.</summary>
+    TimeSyncRequest,
+
+    /// <summary>HOST returns receive/send instants for a timeline-clock sample.</summary>
+    TimeSyncResponse,
+
+    /// <summary>Relay/main HOST sends the numbered authoritative operator state.</summary>
+    OperatorSnapshot,
+
+    /// <summary>Relay asks the main HOST to approve an authenticated invited operator.</summary>
+    OperatorConnectionRequest,
+
+    /// <summary>Joined operator sends its one-second liveness signal.</summary>
+    OperatorHeartbeat,
+
+    /// <summary>Main HOST approves, updates or revokes an operator seat.</summary>
+    OperatorApproval,
+
+    /// <summary>An approved control operator asks the main HOST for priority.</summary>
+    OperatorPriorityRequest,
+
+    /// <summary>Main HOST accepts or rejects a priority request.</summary>
+    OperatorPriorityDecision,
+
+    /// <summary>Main HOST directly transfers or takes back control priority.</summary>
+    OperatorPriorityTransfer,
+
+    /// <summary>Generation-fenced operator command envelope.</summary>
+    OperatorCommand
+}
