@@ -8,7 +8,12 @@ public sealed record AccountRosterList(AccountRosterRow[] Accounts);
 public sealed record AccountActionRow(string Login, string Action, string? Actor, string Reason, DateTime CreatedAt);
 public sealed record AccountActionList(AccountActionRow[] Actions);
 
-public sealed record AccountCreateRequest(string LeagueId, string Login, string DriverName, string DriverNumber, string? LegacyAccountId);
+public sealed record AccountCreateRequest(
+    string LeagueId,
+    string FirstName,
+    string Surname,
+    string DriverNumber,
+    string? LegacyAccountId);
 public sealed record AccountSetStatusRequest(string LeagueId, string Login, string Status, string Reason);
 public sealed record AccountResetRequest(string LeagueId, string Login, string Reason);
 public sealed record AccountReconcileRequest(string RequestId, string Reason);

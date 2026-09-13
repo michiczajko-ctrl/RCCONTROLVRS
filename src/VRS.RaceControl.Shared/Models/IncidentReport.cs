@@ -4,6 +4,52 @@ namespace VRS.RaceControl.Shared.Models;
 
 public sealed class IncidentReport
 {
+    [JsonPropertyName("source")]
+    public IncidentSource Source { get; set; } = IncidentSource.DriverReport;
+
+    [JsonPropertyName("severity")]
+    public IncidentSeverity Severity { get; set; } = IncidentSeverity.Medium;
+
+    [JsonPropertyName("confidence")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IncidentConfidence? Confidence { get; set; }
+
+    [JsonPropertyName("correlationKey")]
+    public string CorrelationKey { get; set; } = string.Empty;
+
+    [JsonPropertyName("trackPositionNormalized")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? TrackPositionNormalized { get; set; }
+
+    [JsonPropertyName("worldPosition")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IncidentVector3? WorldPosition { get; set; }
+
+    [JsonPropertyName("impactPosition")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IncidentVector3? ImpactPosition { get; set; }
+
+    [JsonPropertyName("relativeSpeedKmh")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? RelativeSpeedKmh { get; set; }
+
+    [JsonPropertyName("impactMagnitude")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? ImpactMagnitude { get; set; }
+
+    [JsonPropertyName("detectedAtUtc")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTime? DetectedAtUtc { get; set; }
+
+    [JsonPropertyName("incidentParticipants")]
+    public List<IncidentParticipant> IncidentParticipants { get; set; } = new();
+
+    [JsonPropertyName("reporters")]
+    public List<IncidentReporter> Reporters { get; set; } = new();
+
+    [JsonPropertyName("evidence")]
+    public List<IncidentEvidence> Evidence { get; set; } = new();
+
     public string ReporterAccountKey { get; set; } = string.Empty;
     public List<IncidentDriverReply> DriverReplies { get; set; } = new();
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -77,10 +123,11 @@ public sealed class IncidentReport
     {
         if (string.IsNullOrWhiteSpace(report.SessionId))
             return "Zgłoszenie wymaga aktywnej sesji.";
-        if (string.IsNullOrWhiteSpace(report.ReporterId))
+        if (report.Source != IncidentSource.Auto && string.IsNullOrWhiteSpace(report.ReporterId))
             return "Brak identyfikatora zgłaszającego.";
         if (string.IsNullOrWhiteSpace(report.ReportedDriver)
-            && string.IsNullOrWhiteSpace(report.ReportedCarNumber))
+            && string.IsNullOrWhiteSpace(report.ReportedCarNumber)
+            && report.IncidentParticipants.Count == 0)
             return "Podaj kierowcę lub numer zgłaszanego samochodu.";
         if (string.IsNullOrWhiteSpace(report.Description))
             return "Opis incydentu jest wymagany.";
@@ -99,6 +146,50 @@ public sealed class IncidentHistoryEntry
     public DateTime TimestampUtc { get; set; } = DateTime.UtcNow;
     public string Actor { get; set; } = string.Empty;
     public string Action { get; set; } = string.Empty;
+    public IncidentStatus? PreviousStatus { get; set; }
+    public IncidentStatus? NewStatus { get; set; }
+    public string Note { get; set; } = string.Empty;
+}
+
+public sealed class IncidentVector3
+{
+    public IncidentVector3() { }
+    public IncidentVector3(double x, double y, double z) => (X, Y, Z) = (x, y, z);
+    public double X { get; set; }
+    public double Y { get; set; }
+    public double Z { get; set; }
+
+    public double DistanceTo(IncidentVector3 other)
+    {
+        var x = X - other.X;
+        var y = Y - other.Y;
+        var z = Z - other.Z;
+        return Math.Sqrt(x * x + y * y + z * z);
+    }
+}
+
+public sealed class IncidentParticipant
+{
+    public int VehicleId { get; set; }
+    public string DriverName { get; set; } = string.Empty;
+    public string? CarNumber { get; set; }
+    public IncidentVector3? Position { get; set; }
+    public IncidentVector3? Velocity { get; set; }
+    public double? SpeedKmh { get; set; }
+}
+
+public sealed class IncidentReporter
+{
+    public string ReporterId { get; set; } = string.Empty;
+    public string ReporterName { get; set; } = string.Empty;
+    public DateTime ReportedAtUtc { get; set; } = DateTime.UtcNow;
+}
+
+public sealed class IncidentEvidence
+{
+    public string Kind { get; set; } = string.Empty;
+    public string Detail { get; set; } = string.Empty;
+    public DateTime TimestampUtc { get; set; } = DateTime.UtcNow;
 }
 
 public sealed class IncidentDriverReply
@@ -138,7 +229,37 @@ public enum IncidentType
     PitLaneInfringement,
     SpeedingUnderNeutralization,
     IgnoringFlags,
-    Other
+    Other,
+    CarToCarContact,
+    PossibleContact,
+    HeavyImpact,
+    PossibleBarrierImpact,
+    UnknownImpact
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum IncidentSource
+{
+    DriverReport,
+    Auto,
+    AutoAndDriverReport
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum IncidentSeverity
+{
+    Minor,
+    Medium,
+    Heavy,
+    Severe
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum IncidentConfidence
+{
+    Low,
+    Medium,
+    High
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]

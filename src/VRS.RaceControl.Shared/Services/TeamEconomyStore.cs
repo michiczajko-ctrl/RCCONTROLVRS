@@ -25,9 +25,11 @@ public sealed class TeamEconomyStore
 
     public TeamEconomyStore(string? filePath = null, SyncOutboxStore? outbox = null)
     {
+        var dataRoot = Environment.GetEnvironmentVariable("VRS_RACE_CONTROL_DATA_ROOT");
         _filePath = filePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "VRSRaceControl",
+            string.IsNullOrWhiteSpace(dataRoot)
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VRSRaceControl")
+                : Path.GetFullPath(dataRoot),
             "data",
             "team-economy.json");
         _outbox = outbox ?? new SyncOutboxStore(filePath == null

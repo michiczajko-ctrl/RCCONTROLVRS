@@ -2,7 +2,7 @@ namespace VRS.RaceControl.Shared.Models;
 
 public sealed record AccountRequestInput(string RequestId, string LeagueId, string Login,
     string DriverName, string DriverNumber, string Message, string StatusToken, bool Recovery = false);
-public sealed record AccountRequestReceipt(string Id, string Status, string? ActivationCode = null);
+public sealed record AccountRequestReceipt(string Id, string Status, string? ActivationCode = null, string? Login = null);
 public sealed record AccountRequestRow(string Id, string LeagueId, string Login, string DriverName,
     string DriverNumber, string Message, string Status, bool Recovery, DateTime CreatedAt);
 public sealed record AccountDecision(string RequestId, bool Approve, string Login,

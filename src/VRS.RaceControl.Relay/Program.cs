@@ -153,6 +153,7 @@ app.Map("/vrs", async context =>
         string clientName;
         int permissions;
         bool supportsMultiHost;
+        bool supportsLiveIncidents;
         if (tokenValidator != null
             && tokenValidator.TryValidate(joinPayload.SessionJoinToken, out var identity, out _)
             && identity != null)
@@ -172,6 +173,8 @@ app.Map("/vrs", async context =>
             permissions = identity.Permissions;
             supportsMultiHost = joinPayload.Capabilities?.Contains(
                 ProtocolCapabilities.MultiHostOperators, StringComparer.Ordinal) == true;
+            supportsLiveIncidents = joinPayload.Capabilities?.Contains(
+                ProtocolCapabilities.LiveIncidents, StringComparer.Ordinal) == true;
         }
         else if (allowLegacyJoin
                  && RelayValidation.TryNormalizeSessionCode(joinPayload.SessionCode, out sessionCode)
@@ -181,6 +184,7 @@ app.Map("/vrs", async context =>
             userId = $"legacy:{clientName.ToUpperInvariant()}";
             permissions = role == "host" ? 7 : 0;
             supportsMultiHost = false;
+            supportsLiveIncidents = false;
         }
         else
         {
@@ -250,7 +254,8 @@ app.Map("/vrs", async context =>
             role,
             limits.MaxMessageBytes,
             permissions,
-            supportsMultiHost);
+            supportsMultiHost,
+            supportsLiveIncidents);
 
         if (!session.TryAddClient(client, out var rejectionReason))
         {
@@ -278,8 +283,12 @@ app.Map("/vrs", async context =>
                     IsActive = true
                 },
                 Capabilities = client.SupportsMultiHost
-                    ? [ProtocolCapabilities.MultiHostOperators]
-                    : []
+                    ? client.SupportsLiveIncidents
+                        ? [ProtocolCapabilities.MultiHostOperators, ProtocolCapabilities.LiveIncidents]
+                        : [ProtocolCapabilities.MultiHostOperators]
+                    : client.SupportsLiveIncidents
+                        ? [ProtocolCapabilities.LiveIncidents]
+                        : []
             });
         acknowledgement.SessionCode = sessionCode;
         acknowledgement.SessionId = sessionCode;
@@ -589,8 +598,10 @@ public sealed class RelayClient : IDisposable
         string role,
         int maxMessageBytes,
         int permissions = 0,
-        bool supportsMultiHost = false)
-        : this(socket, id, $"legacy:{id}", name, role, maxMessageBytes, permissions, supportsMultiHost)
+        bool supportsMultiHost = false,
+        bool supportsLiveIncidents = false)
+        : this(socket, id, $"legacy:{id}", name, role, maxMessageBytes, permissions,
+            supportsMultiHost, supportsLiveIncidents)
     {
     }
 
@@ -602,7 +613,8 @@ public sealed class RelayClient : IDisposable
         string role,
         int maxMessageBytes,
         int permissions = 0,
-        bool supportsMultiHost = false)
+        bool supportsMultiHost = false,
+        bool supportsLiveIncidents = false)
     {
         Socket = socket;
         Id = id;
@@ -611,6 +623,7 @@ public sealed class RelayClient : IDisposable
         Role = role;
         Permissions = permissions;
         SupportsMultiHost = supportsMultiHost;
+        SupportsLiveIncidents = supportsLiveIncidents;
         _maxMessageBytes = maxMessageBytes;
     }
 
@@ -621,6 +634,7 @@ public sealed class RelayClient : IDisposable
     public string Role { get; }
     public int Permissions { get; }
     public bool SupportsMultiHost { get; }
+    public bool SupportsLiveIncidents { get; }
     public DateTime LastSeenUtc { get; private set; } = DateTime.UtcNow;
 
     public void MarkSeen() => LastSeenUtc = DateTime.UtcNow;
@@ -665,6 +679,8 @@ public sealed class RelaySession
     private string? _mainUserId;
     private OperatorPriority? _operatorPriority;
     private ProtocolMessage? _latestPanelState;
+    private readonly Dictionary<string, IncidentReport> _incidents = new(StringComparer.Ordinal);
+    private long _incidentRevision;
 
     public RelaySession(string code, int maxClients)
     {
@@ -750,6 +766,15 @@ public sealed class RelaySession
         ProtocolMessage message,
         CancellationToken cancellationToken)
     {
+        if (message.Type is MessageType.IncidentSnapshot or MessageType.IncidentStateUpdate)
+        {
+            lock (_membershipGate)
+                RetainIncidentState(message);
+            await Task.WhenAll(_clients.Values
+                .Where(CanReceiveIncidentState)
+                .Select(client => TrySendAsync(client, message, cancellationToken)));
+            return;
+        }
         if (message.Type == MessageType.RaceControlPanelState
             && (string.IsNullOrWhiteSpace(message.TargetId) || message.TargetId == "all"))
         {
@@ -850,7 +875,10 @@ public sealed class RelaySession
         await BroadcastOperatorSnapshotAsync(cancellationToken);
         await BroadcastDriverListAsync(cancellationToken);
         if (approvedOperator != null)
+        {
             await SendRetainedPanelStateAsync(approvedOperator, cancellationToken);
+            await SendRetainedIncidentStateAsync(approvedOperator, cancellationToken);
+        }
         return true;
     }
 
@@ -891,6 +919,22 @@ public sealed class RelaySession
         {
             message.SenderId = client.UserId;
             await SendToHostAsync(message, cancellationToken);
+            return true;
+        }
+        if (message.Type == MessageType.IncidentStatusCommand
+            && client.SupportsLiveIncidents
+            && priority.HasPermission(client.UserId, OperatorPermissions.Incidents, DateTime.UtcNow))
+        {
+            var command = message.GetPayload<IncidentStatusCommandPayload>();
+            if (command != null && command.CommandId != Guid.Empty
+                && !string.IsNullOrWhiteSpace(command.IncidentId)
+                && command.IncidentId.Length <= 80
+                && Enum.IsDefined(command.Status)
+                && command.Note.Length <= 1000)
+            {
+                message.SenderId = client.UserId;
+                await SendToHostAsync(message, cancellationToken);
+            }
             return true;
         }
         return false;
@@ -955,6 +999,47 @@ public sealed class RelaySession
         if (!RelayRoles.IsSecondaryOperator(client.Role)) return false;
         return _operatorPriority?.Snapshot().Operators.Any(seat => seat.Id == client.UserId
             && seat.IsConnected && seat.Permissions.HasFlag(OperatorPermissions.Observe)) == true;
+    }
+
+    private bool CanReceiveIncidentState(RelayClient client)
+    {
+        if (!client.SupportsLiveIncidents || !RelayRoles.IsSecondaryOperator(client.Role)) return false;
+        return _operatorPriority?.Snapshot().Operators.Any(seat => seat.Id == client.UserId
+            && seat.IsConnected && seat.Permissions.HasFlag(OperatorPermissions.Incidents)) == true;
+    }
+
+    private void RetainIncidentState(ProtocolMessage message)
+    {
+        if (message.Type == MessageType.IncidentSnapshot)
+        {
+            var snapshot = message.GetPayload<IncidentSnapshotPayload>();
+            if (snapshot == null || snapshot.Revision < _incidentRevision) return;
+            _incidents.Clear();
+            foreach (var incident in snapshot.Incidents.Where(item => item != null && !string.IsNullOrWhiteSpace(item.Id)))
+                _incidents[incident.Id] = incident;
+            _incidentRevision = snapshot.Revision;
+        }
+        else if (message.Type == MessageType.IncidentStateUpdate)
+        {
+            var update = message.GetPayload<IncidentStateUpdatePayload>();
+            if (update == null || update.Revision <= _incidentRevision || update.Incident == null
+                || string.IsNullOrWhiteSpace(update.Incident.Id)) return;
+            _incidents[update.Incident.Id] = update.Incident;
+            _incidentRevision = update.Revision;
+        }
+    }
+
+    private async Task SendRetainedIncidentStateAsync(
+        RelayClient recipient,
+        CancellationToken cancellationToken)
+    {
+        if (!CanReceiveIncidentState(recipient) || _incidentRevision <= 0) return;
+        IncidentSnapshotPayload snapshot;
+        lock (_membershipGate)
+            snapshot = new IncidentSnapshotPayload(_incidentRevision, _incidents.Values.ToArray());
+        var message = ProtocolMessage.Create(MessageType.IncidentSnapshot, snapshot);
+        StampRelay(message, recipient.Id);
+        await TrySendAsync(recipient, message, cancellationToken);
     }
 
     private async Task SendRetainedPanelStateAsync(

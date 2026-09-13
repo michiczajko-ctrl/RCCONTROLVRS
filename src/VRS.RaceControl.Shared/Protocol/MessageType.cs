@@ -179,5 +179,14 @@ public enum MessageType
     OperatorPriorityTransfer,
 
     /// <summary>Generation-fenced operator command envelope.</summary>
-    OperatorCommand
+    OperatorCommand,
+
+    /// <summary>Main HOST snapshot for approved live-incidents-v1 operators.</summary>
+    IncidentSnapshot,
+
+    /// <summary>Main HOST numbered replacement of one incident.</summary>
+    IncidentStateUpdate,
+
+    /// <summary>Steward status change; it does not require flag-control priority.</summary>
+    IncidentStatusCommand
 }

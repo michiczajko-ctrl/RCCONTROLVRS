@@ -45,6 +45,7 @@ public sealed record OperatorCommandPayload(Guid CommandId, long Generation, Mes
 public static class ProtocolCapabilities
 {
     public const string MultiHostOperators = "multi-host-v1";
+    public const string LiveIncidents = "live-incidents-v1";
 }
 
 
