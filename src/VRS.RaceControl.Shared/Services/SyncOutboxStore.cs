@@ -14,7 +14,9 @@ public enum SyncEntityType
     /// either way — pushing the same immutable row twice is a no-op via ON CONFLICT DO NOTHING.</summary>
     EconomyLedgerEntry,
     TeamContract,
-    EconomySettings
+    EconomySettings,
+    /// <summary>A league profile and its economy settings, committed to cloud storage as one transaction.</summary>
+    LeagueConfiguration
 }
 
 public enum SyncChangeKind
@@ -34,7 +36,12 @@ public sealed record SyncOutboxEntry(
     string EntityId,
     SyncChangeKind ChangeKind,
     DateTime QueuedAtUtc,
-    int AttemptCount);
+    int AttemptCount,
+    string? CorrelationId = null,
+    long? Revision = null,
+    long? ExpectedRevision = null,
+    string? PayloadJson = null,
+    DateTime? NextAttemptUtc = null);
 
 /// <summary>
 /// Shared by UserAccountStore/LeagueProfileStore/IncidentReportStore, so the
@@ -55,11 +62,11 @@ public sealed class SyncOutboxStore
 
     public SyncOutboxStore(string? filePath = null)
     {
-        _filePath = filePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "VRSRaceControl",
-            "data",
-            "sync-outbox.json");
+        var configuredRoot = Environment.GetEnvironmentVariable("VRS_RACE_CONTROL_DATA_ROOT");
+        _filePath = filePath ?? (!string.IsNullOrWhiteSpace(configuredRoot)
+            ? Path.Combine(configuredRoot, "data", "sync-outbox.json")
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "VRSRaceControl", "data", "sync-outbox.json"));
     }
 
     public string FilePath => _filePath;
@@ -72,7 +79,8 @@ public sealed class SyncOutboxStore
         }
     }
 
-    public void Enqueue(SyncEntityType entityType, string entityId, SyncChangeKind changeKind)
+    public void Enqueue(SyncEntityType entityType, string entityId, SyncChangeKind changeKind,
+        string? correlationId = null, long? revision = null, long? expectedRevision = null, string? payloadJson = null)
     {
         if (string.IsNullOrWhiteSpace(entityId))
         {
@@ -86,7 +94,9 @@ public sealed class SyncOutboxStore
                 entry.EntityType == entityType
                 && string.Equals(entry.EntityId, entityId, StringComparison.OrdinalIgnoreCase));
 
-            var entry = new SyncOutboxEntry(entityType, entityId, changeKind, DateTime.UtcNow, 0);
+            var entry = new SyncOutboxEntry(entityType, entityId, changeKind, DateTime.UtcNow, 0,
+                correlationId ?? Guid.NewGuid().ToString("N"), revision,
+                index >= 0 ? entries[index].ExpectedRevision ?? expectedRevision : expectedRevision, payloadJson);
             if (index >= 0)
             {
                 entries[index] = entry;
@@ -98,6 +108,10 @@ public sealed class SyncOutboxStore
             SaveUnsafe(entries);
         }
     }
+
+    public bool IsPending(SyncEntityType entityType, string entityId) => LoadPending().Any(entry =>
+        entry.EntityType == entityType
+        && string.Equals(entry.EntityId, entityId, StringComparison.OrdinalIgnoreCase));
 
     public void Remove(SyncEntityType entityType, string entityId)
     {
@@ -114,7 +128,7 @@ public sealed class SyncOutboxStore
         }
     }
 
-    public void MarkAttempt(SyncEntityType entityType, string entityId)
+    public void MarkAttempt(SyncEntityType entityType, string entityId, string? correlationId = null)
     {
         lock (s_gate)
         {
@@ -122,11 +136,53 @@ public sealed class SyncOutboxStore
             var index = entries.FindIndex(entry =>
                 entry.EntityType == entityType
                 && string.Equals(entry.EntityId, entityId, StringComparison.OrdinalIgnoreCase));
-            if (index >= 0)
+            if (index >= 0 && (correlationId == null || entries[index].CorrelationId == correlationId))
             {
-                entries[index] = entries[index] with { AttemptCount = entries[index].AttemptCount + 1 };
+                var attempts = entries[index].AttemptCount + 1;
+                entries[index] = entries[index] with { AttemptCount = attempts,
+                    NextAttemptUtc = DateTime.UtcNow.AddSeconds(Math.Min(60, Math.Pow(2, Math.Min(attempts, 6)))) };
                 SaveUnsafe(entries);
             }
+        }
+    }
+
+    public SyncOutboxEntry Freeze(SyncOutboxEntry entry, string payloadJson)
+    {
+        lock (s_gate)
+        {
+            var entries = LoadUnsafe();
+            var index = entries.FindIndex(e => e.EntityType == entry.EntityType && e.EntityId == entry.EntityId
+                && e.CorrelationId == entry.CorrelationId);
+            var frozen = entry with { PayloadJson = entry.PayloadJson ?? payloadJson,
+                CorrelationId = entry.CorrelationId ?? Guid.NewGuid().ToString("N") };
+            if (index >= 0) { entries[index] = frozen; SaveUnsafe(entries); }
+            return frozen;
+        }
+    }
+
+    public void Acknowledge(SyncOutboxEntry sent, long acceptedRevision)
+    {
+        lock (s_gate)
+        {
+            var entries = LoadUnsafe();
+            var index = entries.FindIndex(e => e.EntityType == sent.EntityType && e.EntityId == sent.EntityId);
+            if (index < 0) return;
+            if (entries[index].CorrelationId == sent.CorrelationId) entries.RemoveAt(index);
+            else if (sent.EntityType == SyncEntityType.LeagueConfiguration)
+                entries[index] = entries[index] with { ExpectedRevision = acceptedRevision };
+            SaveUnsafe(entries);
+        }
+    }
+
+    public SyncOutboxEntry ReplaceFrozenPayload(SyncOutboxEntry sent, string payloadJson)
+    {
+        lock(s_gate)
+        {
+            var entries=LoadUnsafe();
+            var index=entries.FindIndex(e=>e.EntityType==sent.EntityType&&e.EntityId==sent.EntityId&&e.CorrelationId==sent.CorrelationId);
+            var normalized=sent with { PayloadJson=payloadJson };
+            if(index>=0){entries[index]=normalized;SaveUnsafe(entries);}
+            return normalized;
         }
     }
 

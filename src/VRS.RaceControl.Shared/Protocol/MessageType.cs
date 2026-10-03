@@ -23,6 +23,11 @@ public enum MessageType
     /// <summary>Host sends a penalty to a driver.</summary>
     Penalty,
 
+    /// <summary>Host pushes one driver's full penalty history on connect — targeted, not
+    /// broadcast (contrast with IncidentSnapshot's broadcast-to-every-approved-operator
+    /// semantics).</summary>
+    PenaltyHistorySnapshot,
+
     /// <summary>Host sends a text message.</summary>
     TextMessage,
 
@@ -70,6 +75,8 @@ public enum MessageType
 
     /// <summary>Synchronizes organization/league configuration.</summary>
     LeagueProfile,
+    LeagueConfigurationSnapshot,
+    LeagueConfigurationAck,
 
     /// <summary>Simulator bridge connection status and heartbeat.</summary>
     TelemetryBridgeStatus,
@@ -86,7 +93,7 @@ public enum MessageType
     /// <summary>Host synchronizes user accounts database with clients.</summary>
     AccountSync,
 
-    /// <summary>Race Director engaged Manual Override — force-sync all clients to GREEN, clear queues.</summary>
+    /// <summary>Race Director engaged manual monitoring mode. Does not change flags or clear driver instructions.</summary>
     ForceSystemReset,
 
     /// <summary>Race Director deactivated Manual Override — automated systems resume, clients should clear the override indicator.</summary>
@@ -188,5 +195,48 @@ public enum MessageType
     IncidentStateUpdate,
 
     /// <summary>Steward status change; it does not require flag-control priority.</summary>
-    IncidentStatusCommand
+    IncidentStatusCommand,
+
+    /// <summary>Authoritative acknowledgement or conflict for a steward edit.</summary>
+    IncidentStatusResult,
+
+    /// <summary>Peer requests an authoritative incident snapshot after a revision gap.</summary>
+    IncidentSnapshotRequest,
+
+    /// <summary>One bounded page of a durable incident snapshot.</summary>
+    IncidentSnapshotPage,
+
+    /// <summary>Authoritative session-state-v2 snapshot used during join and reconnect.</summary>
+    SessionSnapshotV2,
+
+    /// <summary>Generation- and revision-fenced session mutation.</summary>
+    SessionOperationV2,
+
+    /// <summary>Idempotent acknowledgement or conflict response for a session operation.</summary>
+    SessionOperationResultV2,
+
+    /// <summary>Request, renew or release a short resource editing lease.</summary>
+    ResourceLeaseV2,
+
+    /// <summary>Atomic multi-host-v2 ownership handover or takeover.</summary>
+    SessionOwnershipV2,
+
+    /// <summary>Driver requests the current authoritative overlay panels after opening/reconnecting.</summary>
+    OverlayStateRequest,
+    SessionCommand,
+    CommandResult,
+    SessionSnapshot,
+    AuthorityTransfer,
+    TelemetryBatch,
+    TelemetryHealth,
+    TelemetryPublisher,
+    Announcement,
+    EvidenceRequest,
+    EvidencePage,
+    PenaltyHistoryRequest,
+    AuthorityReceipt,
+    AuthorityDeliveryStatus,
+    AuthorityPlaybackReceipt,
+    TrackDefinitionRequest,
+    TrackDefinitionPage
 }

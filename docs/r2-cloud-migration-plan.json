@@ -1,0 +1,80 @@
+{
+  "projectName": "Racecontrolvrs",
+  "projectId": "qdlcxiizxfewuapfrrhz",
+  "authorityEnabledAfterMigration": false,
+  "localSQLVerified": true,
+  "remoteApplied": true,
+  "createdUtc": "2026-10-03T11:37:03.2309934Z",
+  "migrations": [
+    {
+      "file": "20260930000100_relay_incident_cases.sql",
+      "name": "relay_incident_cases",
+      "sha256": "2B6CF29B8288AA5C8C877A1A5C0AE71AFFBC2ADC06CD2E9D3DC102E950E10059"
+    },
+    {
+      "file": "20261002200008_r2_session_authority.sql",
+      "name": "r2_session_authority",
+      "sha256": "2ECDEDB66A96C3354C7E0766B58AF179177D3A3C9DED6F8E1951801DD24AEC75"
+    },
+    {
+      "file": "20261002214315_r2_fixed_authority_mode.sql",
+      "name": "r2_fixed_authority_mode",
+      "sha256": "F4CAC065E6E1450C2634C6906B426C01773EDE2FB23D5F14BC196D94ED896060"
+    },
+    {
+      "file": "20261002221930_r2_authority_operation_ledger.sql",
+      "name": "r2_authority_operation_ledger",
+      "sha256": "A933ECDA8A78CD2EDD50E6C04A8F38F1382795ABEC7C778FCE9942D286CE3F2F"
+    },
+    {
+      "file": "20261002222457_r2_authority_penalty_ledger.sql",
+      "name": "r2_authority_penalty_ledger",
+      "sha256": "6460938EF7A84C8F44115B2D10EE9D73559F5C40A67D6CC1894A0936EDFB7991"
+    },
+    {
+      "file": "20261002224048_r2_authority_delivery_ledger.sql",
+      "name": "r2_authority_delivery_ledger",
+      "sha256": "6A706573DCBAB671D30738B192310CDCAAA27270D8A0491571725EFD528FBE21"
+    },
+    {
+      "file": "20261002224954_r2_telemetry_rule_reports.sql",
+      "name": "r2_telemetry_rule_reports",
+      "sha256": "1715182B0376FF7DA9A25AF349E54B724F9DCD5A72E358016B7CDC9AC008C144"
+    },
+    {
+      "file": "20261002230021_r2_telemetry_evidence.sql",
+      "name": "r2_telemetry_evidence",
+      "sha256": "FD22122AB2EF7DE784A4EBE7D9427BE4B48AACB0A86922EEAE8B26D3B03E91F4"
+    },
+    {
+      "file": "20261002234451_r2_general_telemetry_reports.sql",
+      "name": "r2_general_telemetry_reports",
+      "sha256": "5EC046AF1F04711DD6680F42C4730FF24152F742B1338105E9E7A94428E65B17"
+    },
+    {
+      "file": "20261002235015_r2_audio_delivery_outcomes.sql",
+      "name": "r2_audio_delivery_outcomes",
+      "sha256": "BA9945EC69A9E227D43E55F494AB8AA97A85857A0B70EE1FF1453035FD14B71E"
+    },
+    {
+      "file": "20261003065052_r2_shared_track_definitions.sql",
+      "name": "r2_shared_track_definitions",
+      "sha256": "1829D6071C2E195F5BBFB703C21F2BD0119AC1CF25390845B34C1B3220B7BA88"
+    },
+    {
+      "file": "20261003071220_r2_incident_sequence_numbers.sql",
+      "name": "r2_incident_sequence_numbers",
+      "sha256": "D186B65D1607328F7FD08E052D674CE4CDE1827FA317BFCD67D2EEAB9C336B7A"
+    },
+    {
+      "file": "20261003071652_r2_evidence_export_retention.sql",
+      "name": "r2_evidence_export_retention",
+      "sha256": "617E57BB455E2FA4029B21C411C9A2FBC4475F602B789D792E06756E9824BF23"
+    },
+    {
+      "file": "20261003075926_r2_atomic_incident_penalty.sql",
+      "name": "r2_atomic_incident_penalty",
+      "sha256": "28C3B8BF58ABA53AC814D478D9951B3D3FDB913DA6F2FDCD075E14D21FAC2F9F"
+    }
+  ]
+}

@@ -11,7 +11,19 @@ public sealed record IncidentTelemetryVehicle(
     double LastImpactElapsedTime,
     double LastImpactMagnitude,
     IncidentVector3 LastImpactPosition,
-    IReadOnlyList<double> Damage);
+    IReadOnlyList<double> Damage,
+    int Sector = 0,
+    string? RaceClass = null,
+    double? LapDistanceMeters = null,
+    double? TrackLengthMeters = null,
+    bool? InPitLane = null,
+    double? Throttle = null,
+    double? Brake = null,
+    double? Steering = null,
+    double? SampleElapsedSeconds = null,
+    string? CarModel = null,
+    double? SpeedKmh = null,
+    bool VelocityIsWorld = true);
 
 public sealed record IncidentTelemetryFrame(
     string SessionId,

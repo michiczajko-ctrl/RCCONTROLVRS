@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using VRS.RaceControl.Shared.Enums;
+using VRS.RaceControl.Shared.Models;
 
 namespace VRS.RaceControl.Shared.Protocol;
 
@@ -51,6 +52,17 @@ public class ProtocolMessage
     /// <summary>Monotonic sender sequence where ordering is important.</summary>
     [JsonPropertyName("sequence")]
     public long? Sequence { get; set; }
+
+    [JsonPropertyName("authorityGeneration")]
+    public long? AuthorityGeneration { get; set; }
+
+    [JsonPropertyName("clockEpoch")]
+    public string? ClockEpoch { get; set; }
+
+    [JsonPropertyName("expiresAt")]
+    public DateTimeOffset? ExpiresAt { get; set; }
+    [JsonPropertyName("announcementPriority")]
+    public AnnouncementPriority? AnnouncementPriority { get; set; }
 
     /// <summary>JSON payload containing the actual data (flag info, penalty info, etc.)</summary>
     [JsonPropertyName("payload")]
@@ -105,7 +117,8 @@ public class ProtocolMessage
                 || idElement.GetString()!.Length > 128
                 || !root.TryGetProperty("type", out var typeElement)
                 || typeElement.ValueKind != JsonValueKind.String
-                || !Enum.TryParse<MessageType>(typeElement.GetString(), true, out _))
+                || !Enum.TryParse<MessageType>(typeElement.GetString(), true, out var parsedType)
+                || !Enum.IsDefined(parsedType))
             {
                 return false;
             }

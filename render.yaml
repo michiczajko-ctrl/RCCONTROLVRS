@@ -33,9 +33,15 @@ services:
         value: "true"
       - key: VRS_ALLOW_LEGACY_JOIN
         value: "false"
+      - key: VRS_EVIDENCE_RETENTION_ENABLED
+        value: "false"
       - key: VRS_SESSION_TOKEN_ISSUER
         value: "vrs-race-control-edge"
       - key: VRS_SESSION_TOKEN_AUDIENCE
         value: "vrs-race-control-relay"
       - key: VRS_SESSION_SIGNING_KEY
+        sync: false
+      - key: SUPABASE_URL
+        value: "https://qdlcxiizxfewuapfrrhz.supabase.co"
+      - key: SUPABASE_SECRET_KEY
         sync: false

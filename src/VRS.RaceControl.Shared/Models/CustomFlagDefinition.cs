@@ -9,7 +9,7 @@ public sealed class CustomFlagDefinition
     public string Name { get; set; } = string.Empty;
     public string Code { get; set; } = string.Empty;
     public string Color { get; set; } = "#FFFFFF";
-    public string Icon { get; set; } = "⚑";
+    public string Icon { get; set; } = "\uE7C1";
     public string Description { get; set; } = string.Empty;
     public string DriverMessage { get; set; } = string.Empty;
     public MessagePriority Priority { get; set; } = MessagePriority.Normal;

@@ -24,11 +24,7 @@ public sealed class UserAccountStore
 
     public UserAccountStore(string? path = null, IEnumerable<string>? legacyPaths = null, SyncOutboxStore? outbox = null)
     {
-        FilePath = path ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "VRSRaceControl",
-            "data",
-            "users.json");
+        FilePath = path ?? LocalEnvironmentPaths.DataPath("data", "users.json");
         LegacyPaths = legacyPaths?.ToArray()
             ?? GetDefaultCandidatePaths();
         _outbox = outbox ?? new SyncOutboxStore(path == null
@@ -41,6 +37,7 @@ public sealed class UserAccountStore
 
     private static string[] GetDefaultCandidatePaths()
     {
+        if (LocalEnvironmentPaths.IsolatedData) return [];
         var paths = new List<string>
         {
             Path.Combine(AppContext.BaseDirectory, "users.json"),
@@ -57,7 +54,15 @@ public sealed class UserAccountStore
         lock (s_gate)
         {
             EnsureMigratedLocked();
-            return LoadFromPathLocked(FilePath);
+            var accounts = LoadFromPathLocked(FilePath).ToList();
+            var expired = accounts.Where(account => account.Status == AccountStatus.PendingDelete
+                && account.PurgeAfter is { } purgeAfter && purgeAfter <= DateTime.UtcNow).ToArray();
+            if (expired.Length == 0) return accounts;
+            foreach (var account in expired) accounts.Remove(account);
+            SaveLocked(accounts);
+            foreach (var account in expired)
+                _outbox.Enqueue(SyncEntityType.Account, account.Id, SyncChangeKind.Delete, payloadJson:JsonSerializer.Serialize(new { account.LeagueId,account.SeasonId }));
+            return accounts;
         }
     }
 
@@ -141,7 +146,15 @@ public sealed class UserAccountStore
                 return AuthenticationResult.Failed(AuthenticationFailure.AccountNotFound);
             }
 
-            if (account.Status != AccountStatus.Active)
+            if (account.Status == AccountStatus.Restricted
+                && account.RestrictedUntil is { } restrictionEnd
+                && restrictionEnd <= DateTime.UtcNow)
+            {
+                account.Status = AccountStatus.Active;
+                account.RestrictedUntil = null;
+            }
+
+            if (account.Status is not (AccountStatus.Active or AccountStatus.Restricted))
             {
                 return AuthenticationResult.Failed(AuthenticationFailure.AccountInactive);
             }
@@ -180,6 +193,7 @@ public sealed class UserAccountStore
             account.Login = profile.Login;
             account.DriverName = profile.DriverName;
             account.DriverNumber = profile.DriverNumber;
+            account.OnlineUserId = profile.UserId;
             SaveLocked(accounts);
             _outbox.Enqueue(SyncEntityType.Account, account.Id, SyncChangeKind.Upsert);
             return AccountOperationResult.Succeeded(account);
@@ -258,12 +272,6 @@ public sealed class UserAccountStore
             return AccountOperationResult.Failed("Wymagane dane kierowcy są nieprawidłowe.");
         }
 
-        account.SafetyRating = Math.Clamp(account.SafetyRating, 0, 100);
-        account.PenaltyPoints = Math.Max(0, account.PenaltyPoints);
-        account.PenaltyPointsLimit = Math.Max(0, account.PenaltyPointsLimit);
-        account.SeasonRaceCount = Math.Max(0, account.SeasonRaceCount);
-        account.SeasonRaceLimit = Math.Max(0, account.SeasonRaceLimit);
-
         lock (s_gate)
         {
             EnsureMigratedLocked();
@@ -273,6 +281,16 @@ public sealed class UserAccountStore
             {
                 return AccountOperationResult.Failed("Nie znaleziono konta.");
             }
+            if (!string.IsNullOrWhiteSpace(accounts[index].OnlineUserId))
+            {
+                return AccountOperationResult.Failed("Powiązany profil online jest tylko do odczytu w magazynie lokalnym.");
+            }
+
+            account.SafetyRating = Math.Clamp(account.SafetyRating, 0, 100);
+            account.PenaltyPoints = Math.Max(0, account.PenaltyPoints);
+            account.PenaltyPointsLimit = Math.Max(0, account.PenaltyPointsLimit);
+            account.SeasonRaceCount = Math.Max(0, account.SeasonRaceCount);
+            account.SeasonRaceLimit = Math.Max(0, account.SeasonRaceLimit);
 
             if (accounts.Any(a => a.Id != account.Id
                 && string.Equals(a.Login, account.Login, StringComparison.OrdinalIgnoreCase)))
@@ -296,6 +314,32 @@ public sealed class UserAccountStore
         }
     }
 
+    /// <summary>Refresh only team/class cache after a confirmed online profile save.
+    /// This is deliberately separate from Update, which forbids editing linked accounts.</summary>
+    public AccountOperationResult ApplyConfirmedOnlineRaceAssignment(string accountId, string onlineUserId,
+        string localLeagueId, string teamId, IReadOnlyList<string> classes, AccountChangeEntry history)
+    {
+        if (!Guid.TryParse(onlineUserId, out var verifiedId)
+            || classes.Any(value => value is not ("GT3" or "HYPERCAR")))
+            return AccountOperationResult.Failed("Invalid confirmed online race assignment.");
+        lock (s_gate)
+        {
+            EnsureMigratedLocked();
+            var accounts = LoadFromPathLocked(FilePath).ToList();
+            var account = accounts.SingleOrDefault(item => item.Id == accountId);
+            if (account == null || account.LeagueId != localLeagueId
+                || !Guid.TryParse(account.OnlineUserId, out var storedId) || storedId != verifiedId)
+                return AccountOperationResult.Failed("Confirmed online identity does not match the local account.");
+            account.Team = teamId;
+            account.RaceClasses = classes.Distinct().OrderBy(value => value == "GT3" ? 0 : 1).ToList();
+            account.RaceClass = account.RaceClasses.FirstOrDefault() ?? string.Empty;
+            account.ChangeHistory.Add(history);
+            SaveLocked(accounts);
+            // The cloud save is already authoritative; do not queue a local edit back to it.
+            return AccountOperationResult.Succeeded(account);
+        }
+    }
+
     public AccountOperationResult ResetPassword(string accountId, string newPassword)
     {
         if (!IsValidPassword(newPassword))
@@ -313,6 +357,10 @@ public sealed class UserAccountStore
             {
                 return AccountOperationResult.Failed("Nie znaleziono konta.");
             }
+            if (!string.IsNullOrWhiteSpace(account.OnlineUserId))
+            {
+                return AccountOperationResult.Failed("Powiązany profil online jest tylko do odczytu w magazynie lokalnym.");
+            }
 
             var hash = PasswordHasher.Hash(newPassword);
             account.PasswordHash = hash.Hash;
@@ -327,17 +375,48 @@ public sealed class UserAccountStore
         }
     }
 
-    public bool Delete(string accountId)
+    public AccountOperationResult ChangePassword(string accountId, string currentPassword, string newPassword)
+    {
+        if (!IsValidPassword(newPassword)) return AccountOperationResult.Failed("Nowe hasło jest nieprawidłowe.");
+        lock (s_gate)
+        {
+            EnsureMigratedLocked();
+            var accounts = LoadFromPathLocked(FilePath).ToList();
+            var account = accounts.FirstOrDefault(a => a.Id == accountId);
+            if (account == null) return AccountOperationResult.Failed("Nie znaleziono konta.");
+            if (!string.IsNullOrWhiteSpace(account.OnlineUserId))
+                return AccountOperationResult.Failed("Hasło konta online zmień przez Supabase.");
+            if (!PasswordHasher.Verify(currentPassword, account.PasswordHash, account.PasswordSalt,
+                    account.PasswordIterations))
+                return AccountOperationResult.Failed("Obecne hasło jest nieprawidłowe.");
+            var password = PasswordHasher.Hash(newPassword);
+            account.PasswordHash = password.Hash;
+            account.PasswordSalt = password.Salt;
+            account.PasswordIterations = password.Iterations;
+            account.TeamHubToken = GenerateTeamHubToken();
+            account.ChangeHistory.Add(new AccountChangeEntry { Actor = account.Login, Action = "password_changed" });
+            SaveLocked(accounts);
+            return AccountOperationResult.Succeeded(account);
+        }
+    }
+
+    public bool Delete(string accountId, bool enqueueForSync = true)
     {
         lock (s_gate)
         {
             EnsureMigratedLocked();
             var accounts = LoadFromPathLocked(FilePath).ToList();
+            if (accounts.Any(a => a.Id == accountId && !string.IsNullOrWhiteSpace(a.OnlineUserId)))
+            {
+                return false;
+            }
+            var deletedAccount=accounts.FirstOrDefault(a=>a.Id==accountId);
             var removed = accounts.RemoveAll(a => a.Id == accountId) > 0;
             if (removed)
             {
                 SaveLocked(accounts);
-                _outbox.Enqueue(SyncEntityType.Account, accountId, SyncChangeKind.Delete);
+                if(enqueueForSync)_outbox.Enqueue(SyncEntityType.Account, accountId, SyncChangeKind.Delete,
+                    payloadJson:JsonSerializer.Serialize(new { deletedAccount!.LeagueId,deletedAccount.SeasonId }));
             }
             return removed;
         }
@@ -362,7 +441,7 @@ public sealed class UserAccountStore
 
         if (!IsValidDriverNumber(driverNumber))
         {
-            return AccountOperationResult.Failed("Numer kierowcy musi być liczbą od 0 do 9999.");
+            return AccountOperationResult.Failed("Numer kierowcy musi składać się z 1-4 cyfr.");
         }
 
         if (!IsValidPassword(password))
@@ -374,8 +453,7 @@ public sealed class UserAccountStore
         return AccountOperationResult.Succeeded();
     }
 
-    private static bool IsValidDriverNumber(string value) =>
-        int.TryParse(value, out var number) && number is >= 0 and <= 9999;
+    private static bool IsValidDriverNumber(string value) => DriverNumberRules.IsValid(value?.Trim());
 
     private static bool IsValidPassword(string value) =>
         !string.IsNullOrWhiteSpace(value);
@@ -441,6 +519,7 @@ public sealed class UserAccountStore
             }
 
             account.LeagueId = NormalizeScope(account.LeagueId, "vrs");
+            account.SeriesCode = NormalizeScope(account.SeriesCode, account.LeagueId);
             account.SeasonId = NormalizeScope(account.SeasonId, "default");
 
             if (string.IsNullOrEmpty(account.TeamHubToken))
@@ -497,6 +576,7 @@ public sealed class UserAccountStore
                 account.PasswordHash ??= string.Empty;
                 account.PasswordSalt ??= string.Empty;
                 account.LeagueId ??= "vrs";
+                account.SeriesCode ??= account.LeagueId;
                 account.SeasonId ??= "default";
                 account.ChangeHistory ??= new List<AccountChangeEntry>();
             }
@@ -539,7 +619,8 @@ public enum AuthenticationFailure
     None,
     InvalidCredentials,
     AccountNotFound,
-    AccountInactive
+    AccountInactive,
+    LeagueMismatch
 }
 
 public sealed record AuthenticationResult(

@@ -17,11 +17,7 @@ public sealed class IncidentReportStore
 
     public IncidentReportStore(string? filePath = null, SyncOutboxStore? outbox = null)
     {
-        _filePath = filePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "VRSRaceControl",
-            "data",
-            "incidents.json");
+        _filePath = filePath ?? LocalEnvironmentPaths.DataPath("data", "incidents.json");
         _outbox = outbox ?? new SyncOutboxStore(filePath == null
             ? null
             : Path.Combine(Path.GetDirectoryName(_filePath) ?? string.Empty, "sync-outbox.json"));
@@ -72,7 +68,7 @@ public sealed class IncidentReportStore
         }
     }
 
-    public bool Remove(string reportId)
+    public bool Remove(string reportId, bool enqueueForSync = true)
     {
         lock (_sync)
         {
@@ -82,9 +78,22 @@ public sealed class IncidentReportStore
             if (removed)
             {
                 SaveUnsafe(reports);
-                _outbox.Enqueue(SyncEntityType.IncidentReport, reportId, SyncChangeKind.Delete);
+                if(enqueueForSync)_outbox.Enqueue(SyncEntityType.IncidentReport, reportId, SyncChangeKind.Delete, payloadJson:"{}");
             }
             return removed;
+        }
+    }
+
+    /// <summary>Replace one live session from the relay without generating cloud writes.</summary>
+    public void ReplaceSession(string sessionId, IReadOnlyList<IncidentReport> authoritative)
+    {
+        lock (_sync)
+        {
+            var reports = LoadUnsafe();
+            reports.RemoveAll(item => string.Equals(item.SessionId, sessionId,
+                StringComparison.OrdinalIgnoreCase));
+            reports.AddRange(authoritative);
+            SaveUnsafe(reports);
         }
     }
 
@@ -107,8 +116,8 @@ public sealed class IncidentReportStore
         }
 
         return Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "VRSRaceControl",
+            Environment.GetEnvironmentVariable("VRS_RACE_CONTROL_DATA_ROOT")
+                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VRSRaceControl"),
             directory,
             $"{filePrefix}-{safeDriverId}.json");
     }

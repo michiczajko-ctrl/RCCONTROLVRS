@@ -1,9 +1,16 @@
 using VRS.RaceControl.Shared.Enums;
 
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
 namespace VRS.RaceControl.Shared.Models;
 
 public sealed class LeagueProfile
 {
+    /// <summary>Scope of this confirmed server revision; empty only for legacy local profiles.</summary>
+    public string ConfigurationSeasonId { get; set; } = string.Empty;
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
     private int _pitLaneSpeedLimitKmh = 60;
     public int PitLaneSpeedLimitKmh { get => _pitLaneSpeedLimitKmh; set => _pitLaneSpeedLimitKmh = VRS.RaceControl.Shared.Services.PitLaneRules.Normalize(value); }
     public bool SupportsIncidentReplies { get; set; }
@@ -12,11 +19,20 @@ public sealed class LeagueProfile
     public const string VvsEId = "vvs-e";
     public const string DefaultInternetServerUrl = "https://rccontrolvrs.onrender.com";
 
+    /// <summary>
+    /// Monotonic configuration revision. Older profile documents deserialize as revision 0
+    /// and are promoted by <see cref="Services.LeagueProfileStore"/> on their next save.
+    /// </summary>
+    public long Revision { get; set; }
+    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+    public string UpdatedBy { get; set; } = "HOST";
+
     public string Id { get; set; } = DefaultId;
     public string FullName { get; set; } = "Vistula Racing Series";
     public string ShortName { get; set; } = "VRS";
     public string RaceControlName { get; set; } = "VRS Race Control";
     public string? LogoPath { get; set; }
+    public string? LogoAssetPath { get; set; }
     public string PrimaryColor { get; set; } = "#58A6FF";
     public string SecondaryColor { get; set; } = "#A371F7";
     public string AccentColor { get; set; } = "#EC407A";
@@ -31,6 +47,7 @@ public sealed class LeagueProfile
     public double SafetyRatingMaximum { get; set; } = 100;
     public List<string> DriverCategories { get; set; } = new();
     public List<string> Seasons { get; set; } = new();
+    public List<LeagueSeasonDefinition> SeasonDefinitions { get; set; } = new();
     public List<string> Teams { get; set; } = new();
     /// <summary>
     /// Stable team identities, introduced alongside the Economy feature so a team's
@@ -54,6 +71,7 @@ public sealed class LeagueProfile
     /// </summary>
     public List<TeamJoinRequestEntry> PendingJoinRequests { get; set; } = new();
     public List<string> Licenses { get; set; } = new();
+    public List<LeagueLicenseDefinition> LicenseDefinitions { get; set; } = new();
     public List<string> EnabledStandardFlags { get; set; } = new()
     {
         "Green", "Yellow", "DoubleYellow", "Blue", "Red", "BlackAndWhite",
@@ -125,19 +143,24 @@ public sealed class LeagueProfile
                 break;
             case VvsEId:
                 profile.Id = VvsEId;
-                profile.FullName = "VVS-E";
-                profile.ShortName = "VVS-E";
-                profile.RaceControlName = "VVS-E Race Control";
+                profile.FullName = "VES";
+                profile.ShortName = "VES";
+                profile.RaceControlName = "VES Race Control";
                 profile.PrimaryColor = "#18C9A7";
                 profile.SecondaryColor = "#2F81F7";
                 profile.AccentColor = "#D7F9F1";
-                profile.OverlayFooter = "VVS-E RACE CONTROL";
+                profile.OverlayFooter = "VES RACE CONTROL";
                 break;
             case DefaultId:
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(id), "Unsupported league profile.");
         }
+        profile.Seasons = new List<string> { "default" };
+        profile.SeasonDefinitions = new List<LeagueSeasonDefinition>
+        {
+            new() { Id = "default", Name = "default" }
+        };
         return profile;
     }
 
@@ -223,6 +246,26 @@ public sealed class LeagueProfile
         return TeamPermissions[key].FirstOrDefault(m => string.Equals(m.Login, login, StringComparison.OrdinalIgnoreCase));
     }
 
+    public List<string> CeoTeamIds(string? login) => string.IsNullOrWhiteSpace(login)
+        ? new List<string>()
+        : TeamEntries.Where(team => !team.IsArchived
+            && FindMemberPermission(team.Id, login)?.IsCeo == true)
+            .Select(team => team.Id).ToList();
+
+    /// <summary>Keep every confirmed CEO's operational rights in sync with the role.</summary>
+    public void EnsureCeoPermissions()
+    {
+        foreach (var team in TeamEntries.Where(t => !t.IsArchived))
+        {
+            foreach (var member in GetTeamPermissions(team.Id).Where(p => p.IsCeo))
+            {
+                member.CanAnnounce = true;
+                member.CanAddMembers = true;
+                member.CanManageEconomy = true;
+            }
+        }
+    }
+
     /// <summary>
     /// Drops permission entries for teams that no longer exist in <see cref="TeamEntries"/>
     /// — note an archived team (see MainViewModel.RemoveTeam) is still a valid entry here,
@@ -251,6 +294,21 @@ public sealed class LeagueProfile
     public override string ToString() => string.IsNullOrWhiteSpace(FullName) ? ShortName : FullName;
 }
 
+public sealed class LeagueLicenseDefinition
+{
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+
+    public string? Validate()
+    {
+        if (string.IsNullOrWhiteSpace(Code) || Code.Trim().Length > 24)
+            return "Kod licencji musi mieć od 1 do 24 znaków.";
+        if (string.IsNullOrWhiteSpace(Name) || Name.Trim().Length > 80)
+            return "Nazwa licencji musi mieć od 1 do 80 znaków.";
+        return null;
+    }
+}
+
 public sealed class LeagueRace
 {
     /// <summary>
@@ -263,6 +321,31 @@ public sealed class LeagueRace
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
     public string Track { get; set; } = string.Empty;
+    /// <summary>Optional for legacy calendars; newly created editor entries always set it.</summary>
+    public DateTime? StartsAtUtc { get; set; }
+    /// <summary>ISO 3166-1 alpha-2 country code (e.g. "JP", "IT"). Optional — older calendars have none.</summary>
+    public string? CountryCode { get; set; }
+    /// <summary>Session length in minutes. Optional — older calendars have none.</summary>
+    public int? DurationMinutes { get; set; }
+    public string TrackFact { get; set; } = string.Empty;
+    public int? CostPresetId { get; set; }
+    [JsonIgnore]
+    public DateTime? StartsAtLocal
+    {
+        get => StartsAtUtc?.ToLocalTime();
+        set => StartsAtUtc = value.HasValue ? DateTime.SpecifyKind(value.Value, DateTimeKind.Local).ToUniversalTime() : null;
+    }
+    [JsonIgnore]
+    public string StartsAtLocalDisplay => StartsAtUtc.HasValue
+        ? StartsAtUtc.Value.ToLocalTime().ToString("dd.MM.yyyy HH:mm")
+        : "Data do ustalenia";
+}
+
+public sealed class LeagueSeasonDefinition
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public List<LeagueRace> Races { get; set; } = new();
 }
 
 /// <summary>
@@ -275,6 +358,9 @@ public sealed class Team
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public string Name { get; set; } = string.Empty;
     public string ShortName { get; set; } = string.Empty;
+    public string RaceClass { get; set; } = string.Empty;
+    public string? WalletId { get; set; }
+    public string CeoDisplayName { get; set; } = string.Empty;
     public string ColorHex { get; set; } = "#58A6FF";
     public bool IsArchived { get; set; }
     public List<string> PreviousNames { get; set; } = new();

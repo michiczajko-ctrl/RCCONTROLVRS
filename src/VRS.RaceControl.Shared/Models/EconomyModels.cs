@@ -134,6 +134,9 @@ public sealed class RoundEconomyOverride
 
 public sealed class LeagueEconomySettings
 {
+    public bool UseWalletEconomy { get; set; }
+    public bool SeasonCompleted { get; set; }
+    public long ConfirmedConfigurationRevision { get; set; }
     public string LeagueId { get; set; } = string.Empty;
     public string SeasonId { get; set; } = "default";
     public bool Enabled { get; set; }

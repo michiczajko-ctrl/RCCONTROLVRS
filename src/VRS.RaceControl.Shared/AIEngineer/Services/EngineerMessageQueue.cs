@@ -7,11 +7,33 @@ public sealed class EngineerMessageQueue
     private readonly List<EngineerMessage> _queue = new();
     private readonly Dictionary<string, DateTime> _cooldowns = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _gate = new();
-    private readonly int _maxLength;
+    private int _maxLength;
 
     public EngineerMessageQueue(int maxLength = 16)
     {
         _maxLength = Math.Max(1, maxLength);
+    }
+
+    /// <summary>
+    /// Applies a new capacity in place, trimming only the lowest-priority tail if the queue is
+    /// now over the new limit. Callers reacting to a settings change must use this instead of
+    /// constructing a replacement queue — swapping the queue object out from under a message
+    /// that's currently being spoken (<see cref="CurrentMessage"/>) silently orphans it along
+    /// with anything still waiting behind it, with no error and no log entry.
+    /// </summary>
+    public void SetMaxLength(int maxLength)
+    {
+        var discarded = new List<EngineerMessage>();
+        lock (_gate)
+        {
+            _maxLength = Math.Max(1, maxLength);
+            while (_queue.Count > _maxLength)
+            {
+                discarded.Add(_queue[_queue.Count - 1]);
+                _queue.RemoveAt(_queue.Count - 1);
+            }
+        }
+        foreach (var message in discarded) MessageSuperseded?.Invoke(message);
     }
 
     public EngineerMessage? CurrentMessage { get; private set; }
@@ -29,20 +51,21 @@ public sealed class EngineerMessageQueue
     public event Action<EngineerMessage>? MessageEnqueued;
     public event Action<EngineerMessage>? MessageInterrupted;
     public event Action<EngineerMessage>? MessageSuperseded;
+    public event Action<EngineerMessage>? MessageExpired;
 
     public bool Enqueue(EngineerMessage message, DateTime? nowUtc = null)
     {
         var now = nowUtc ?? DateTime.UtcNow;
+        ExpirePending(now);
         var key = string.IsNullOrWhiteSpace(message.DeduplicationKey)
             ? message.EventType.ToString()
             : message.DeduplicationKey;
         EngineerMessage? interrupted = null;
         var superseded = new List<EngineerMessage>();
+        var accepted = false;
 
         lock (_gate)
         {
-            RemoveExpiredLocked(now);
-
             if (_cooldowns.TryGetValue(key, out var last) && now - last < message.Cooldown)
             {
                 return false;
@@ -97,8 +120,11 @@ public sealed class EngineerMessageQueue
 
             while (_queue.Count > _maxLength)
             {
+                superseded.Add(_queue[_queue.Count - 1]);
                 _queue.RemoveAt(_queue.Count - 1);
             }
+            accepted = _queue.Contains(message);
+            if (!accepted) _cooldowns.Remove(key);
         }
 
         foreach (var item in superseded)
@@ -109,16 +135,16 @@ public sealed class EngineerMessageQueue
         {
             MessageInterrupted?.Invoke(interrupted);
         }
-        MessageEnqueued?.Invoke(message);
-        return true;
+        if (accepted) MessageEnqueued?.Invoke(message);
+        return accepted;
     }
 
     public bool TryStartNext(out EngineerMessage message, DateTime? nowUtc = null)
     {
         var now = nowUtc ?? DateTime.UtcNow;
+        ExpirePending(now);
         lock (_gate)
         {
-            RemoveExpiredLocked(now);
             if (CurrentMessage != null || _queue.Count == 0)
             {
                 message = null!;
@@ -132,25 +158,47 @@ public sealed class EngineerMessageQueue
         }
     }
 
-    public void CompleteCurrent()
+    public void CompleteCurrent(string? expectedMessageId = null)
     {
         lock (_gate)
         {
-            CurrentMessage = null;
+            if (expectedMessageId == null || CurrentMessage?.Id == expectedMessageId)
+                CurrentMessage = null;
         }
     }
 
     public void Clear()
     {
+        EngineerMessage? interrupted;
+        EngineerMessage[] removed;
         lock (_gate)
         {
+            interrupted = CurrentMessage; removed = _queue.ToArray();
             CurrentMessage = null;
             _queue.Clear();
         }
+        if (interrupted != null) MessageInterrupted?.Invoke(interrupted);
+        foreach (var message in removed) MessageSuperseded?.Invoke(message);
+    }
+    public bool IsCurrent(string id) { lock (_gate) return CurrentMessage?.Id == id; }
+    public IReadOnlyList<EngineerMessage> RemovePending(Func<EngineerMessage, bool> predicate)
+    {
+        lock (_gate)
+        {
+            var removed = _queue.Where(predicate).ToArray();
+            _queue.RemoveAll(message => predicate(message));
+            return removed;
+        }
     }
 
-    private void RemoveExpiredLocked(DateTime now)
+    private void ExpirePending(DateTime now)
     {
-        _queue.RemoveAll(m => m.IsExpired(now));
+        EngineerMessage[] expired;
+        lock (_gate)
+        {
+            expired = _queue.Where(m => m.IsExpired(now)).ToArray();
+            _queue.RemoveAll(m => expired.Contains(m));
+        }
+        foreach (var message in expired) MessageExpired?.Invoke(message);
     }
 }

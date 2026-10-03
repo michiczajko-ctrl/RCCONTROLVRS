@@ -681,6 +681,8 @@ public sealed class EconomyService
     /// drift out of step with what was just written to the ledger.</summary>
     private EconomyOperationResult AppendMany(IReadOnlyList<EconomyLedgerEntry> entries)
     {
+        if(entries.Any(e => _teamEconomy.LoadSettings(e.LeagueId,e.SeasonId).UseWalletEconomy))
+            return EconomyOperationResult.Failed("Ten sezon używa portfeli Supabase. Otwórz Edytor → Portfele. / Use Editor → Wallets for this season.");
         if (entries.Count == 0)
         {
             return EconomyOperationResult.Succeeded(Array.Empty<string>(), 0);

@@ -13,7 +13,17 @@ public sealed record AccountDecision(string RequestId, bool Approve, string Logi
 /// full local <c>UserAccount</c> model (which carries PasswordHash/PasswordSalt/TeamHubToken
 /// that the server never sends and this flow never needs).
 /// </summary>
-public sealed record OnlineAccountProfile(string Id, string Login, string DriverName, string DriverNumber, string LeagueId);
+public sealed record OnlineAccountProfile(string Id, string Login, string DriverName, string DriverNumber,
+    string LeagueId, string? UserId = null, string AccountType = "driver", string Status = "active",
+    DateTime? RestrictedUntil = null);
+
+/// <summary>A driver (racing) number is 1-4 ASCII digits — no letters, signs or whitespace.</summary>
+public static class DriverNumberRules
+{
+    public const int MaxLength = 4;
+    public static bool IsValid(string? value) =>
+        !string.IsNullOrEmpty(value) && value.Length <= MaxLength && value.All(char.IsAsciiDigit);
+}
 
 public static class AccountRequestRules
 {
@@ -23,6 +33,7 @@ public static class AccountRequestRules
         if (input.Login.Trim().Length is < 2 or > 80 || input.Login.Any(char.IsControl)) return "Invalid login";
         if (input.DriverName.Trim().Length is < 2 or > 80) return "Invalid driver name";
         if (input.DriverNumber.Length > 20 || input.Message.Length > 500) return "Input too long";
+        if (input.DriverNumber.Length > 0 && !DriverNumberRules.IsValid(input.DriverNumber)) return "Invalid driver number";
         if (input.StatusToken.Length is < 40 or > 128) return "Invalid status token";
         return null;
     }

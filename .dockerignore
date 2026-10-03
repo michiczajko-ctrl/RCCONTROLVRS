@@ -1,7 +1,44 @@
-.git
-.gitignore
-**/bin
-**/obj
-artifacts
-publish
+# Source control and local editor state
+.git/
+.github/
+.codex/
+.agents/
+.vs/
+.vscode/
+.local/
+**/.env
+**/.env.*
+**/*signing-key*
 
+# Build output and self-contained release packages. These can be hundreds of MB
+# and are not inputs to the relay image; the Dockerfile publishes its own image.
+**/bin/
+**/obj/
+publish/
+artifacts/
+.build/
+
+# Desktop-only projects and generated UI smoke images
+src/VRS.RaceControl.Host/
+src/VRS.RaceControl.Client/
+src/VRS.RaceControl.ACBridge/
+src/VRS.RaceControl.Shared.UI/
+tools/
+tests/
+Commentator/
+
+# Local data, credentials and generated reports
+**/users.json
+**/tokens.json
+**/*.db
+**/*.sqlite
+**/*.sqlite-shm
+**/*.sqlite-wal
+**/appsettings.*.json
+*.log
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.mp4
+*.zip

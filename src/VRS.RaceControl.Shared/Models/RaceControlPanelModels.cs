@@ -27,11 +27,17 @@ public sealed class TimedPanelTransitionPayload
     public DateTimeOffset CountdownStartsAtHostTime { get; set; }
     public DateTimeOffset TargetEffectiveAtHostTime { get; set; }
     public int CountdownSeconds { get; set; } = 5;
+    public bool HideCountdown { get; set; }
+    public PanelAudioAnnouncement? AudioAnnouncement { get; set; }
+    public bool SuppressAudio { get; set; }
 
     public string? Validate()
     {
         if (string.IsNullOrWhiteSpace(TransitionId) || TransitionId.Length > 128)
             return "Transition id is invalid.";
+        if (AudioAnnouncement is { } audio && (audio.EventId.Length > 128 || audio.EventId != TransitionId + ":cue" || audio.Generation < 1
+            || audio.Revision < 1 || string.IsNullOrWhiteSpace(audio.ClockEpoch)))
+            return "Transition audio identity is invalid.";
         if (!Enum.IsDefined(SourceState) || !Enum.IsDefined(TargetState))
             return "Transition flag state is invalid.";
         if (CountdownSeconds is < 1 or > 30)
@@ -40,11 +46,13 @@ public sealed class TimedPanelTransitionPayload
             || CountdownStartsAtHostTime >= TargetEffectiveAtHostTime)
             return "Transition timestamps are out of order.";
         var expected = TimeSpan.FromSeconds(CountdownSeconds);
-        if (Math.Abs((TargetEffectiveAtHostTime - CountdownStartsAtHostTime - expected).TotalMilliseconds) > 50)
+        if (!HideCountdown && Math.Abs((TargetEffectiveAtHostTime - CountdownStartsAtHostTime - expected).TotalMilliseconds) > 50)
             return "Transition duration does not match countdown seconds.";
         return null;
     }
 }
+
+public sealed record PanelAudioAnnouncement(string EventId, long Generation, long Revision, string ClockEpoch);
 
 public sealed class TimedFastLaneTransitionPayload
 {
@@ -79,8 +87,11 @@ public sealed class TimedFastLaneTransitionPayload
 /// </summary>
 public sealed class RaceControlPanelStatePayload
 {
+    public string? EventId { get; set; }
     public string EpochId { get; set; } = string.Empty;
     public long Revision { get; set; }
+    public long AuthorityGeneration { get; set; }
+    public string? ClockEpoch { get; set; }
     public FlagType FlagState { get; set; } = FlagType.None;
     public PanelFlashMode FlashMode { get; set; } = PanelFlashMode.Steady;
     public int FlashPeriodMs { get; set; } = 1000;
@@ -101,6 +112,9 @@ public sealed class RaceControlPanelStatePayload
             return "Panel flash period is outside the allowed range.";
         if (HostNow == default || FlashEpochHostTime == default)
             return "Panel state contains an invalid HOST timestamp.";
+        if (Transition?.AudioAnnouncement is { } audio && (audio.ClockEpoch != ClockEpoch
+            || audio.Generation > AuthorityGeneration || audio.Revision > Revision || Transition.SuppressAudio))
+            return "Panel audio does not belong to the accepted authority timeline.";
         if (Transition != null
             && Math.Abs((Transition.TargetEffectiveAtHostTime - HostNow).TotalMinutes) > 5)
             return "Panel transition is outside the accepted HOST-time window.";
@@ -114,6 +128,8 @@ public sealed class RaceControlPanelStatePayload
 public sealed class TimeSyncRequestPayload
 {
     public string RequestId { get; set; } = string.Empty;
+    public double? UncertaintyMs { get; set; }
+    public string? ClockEpoch { get; set; }
 }
 
 public sealed class TimeSyncResponsePayload
@@ -121,6 +137,7 @@ public sealed class TimeSyncResponsePayload
     public string RequestId { get; set; } = string.Empty;
     public DateTimeOffset HostReceivedAt { get; set; }
     public DateTimeOffset HostSentAt { get; set; }
+    public string? ClockEpoch { get; set; }
 }
 
 /// <summary>Pure HOST-time projection used by UI and tests.</summary>
@@ -144,6 +161,9 @@ public static class TrackPanelTimeline
         var transition = snapshot.Transition;
         if (transition != null && transition.Validate() == null)
         {
+            if (transition.HideCountdown && hostNow < transition.TargetEffectiveAtHostTime)
+                return new TrackPanelFrame(transition.SourceState, null, true,
+                    transition.TargetEffectiveAtHostTime);
             if (hostNow < transition.CountdownStartsAtHostTime)
             {
                 return new TrackPanelFrame(

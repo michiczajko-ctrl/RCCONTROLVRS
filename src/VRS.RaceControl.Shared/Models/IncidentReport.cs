@@ -4,11 +4,75 @@ namespace VRS.RaceControl.Shared.Models;
 
 public sealed class IncidentReport
 {
+    public string? IssuedPenaltyId { get; set; }
+    [JsonPropertyName("sequenceNumber")]
+    public int SequenceNumber { get; set; }
+
+    [JsonIgnore]
+    public string DisplayNumber => SequenceNumber > 0 ? SequenceNumber.ToString("000") : "---";
+
+    [JsonIgnore]
+    public string RaceClassDisplay
+    {
+        get
+        {
+            var classes = IncidentParticipants.Select(item => IncidentRaceClass.Normalize(item.RaceClass))
+                .Where(value => value != null).Distinct(StringComparer.Ordinal).ToArray();
+            return classes.Length == 0 ? "Unknown" : string.Join(" ↔ ", classes);
+        }
+    }
+
+    [JsonIgnore]
+    public string SeverityExplanation => Evidence.FirstOrDefault(item =>
+        item.Kind == "SeverityReason")?.Detail ?? "Impact magnitude only";
+
+    [JsonIgnore]
+    public string ConfidenceExplanation => Evidence.FirstOrDefault(item =>
+        item.Kind == "ConfidenceReason")?.Detail ?? "Evidence details unavailable";
+
+    [JsonIgnore]
+    public bool IsCrossClass => IncidentParticipants.Select(item =>
+            IncidentRaceClass.Normalize(item.RaceClass))
+        .Where(value => value != null).Distinct(StringComparer.Ordinal).Skip(1).Any();
+
+    [JsonPropertyName("caseStatus")]
+    public IncidentCaseStatus CaseStatus { get; set; } = IncidentCaseStatus.New;
+
+    [JsonPropertyName("workflowVersion")]
+    public int WorkflowVersion { get; set; }
+
+    [JsonPropertyName("decision")]
+    public IncidentDecision Decision { get; set; } = IncidentDecision.Pending;
     [JsonPropertyName("source")]
     public IncidentSource Source { get; set; } = IncidentSource.DriverReport;
 
     [JsonPropertyName("severity")]
     public IncidentSeverity Severity { get; set; } = IncidentSeverity.Medium;
+
+    [JsonIgnore]
+    public string SourceDisplay => Source switch
+    {
+        IncidentSource.Auto => "AUTO",
+        IncidentSource.DriverReport => "DRIVER",
+        _ => "AUTO + DRIVER"
+    };
+
+    [JsonIgnore]
+    public string CaseStatusDisplay => CaseStatus switch
+    {
+        IncidentCaseStatus.New => "NEW",
+        IncidentCaseStatus.Reviewing => "REVIEW",
+        _ => "CLOSED"
+    };
+
+    [JsonIgnore]
+    public string SeverityDisplay => Severity switch
+    {
+        IncidentSeverity.Minor => "LOW",
+        IncidentSeverity.Medium => "MEDIUM",
+        IncidentSeverity.Heavy => "HIGH",
+        _ => "CRITICAL"
+    };
 
     [JsonPropertyName("confidence")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -16,6 +80,13 @@ public sealed class IncidentReport
 
     [JsonPropertyName("correlationKey")]
     public string CorrelationKey { get; set; } = string.Empty;
+    [JsonPropertyName("telemetryRule")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TelemetryRuleReport? TelemetryRule { get; set; }
+    public TelemetryObservation? TelemetryObservation { get; set; }
+    [JsonPropertyName("telemetryEvidenceId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TelemetryEvidenceId { get; set; }
 
     [JsonPropertyName("trackPositionNormalized")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -46,6 +117,10 @@ public sealed class IncidentReport
 
     [JsonPropertyName("reporters")]
     public List<IncidentReporter> Reporters { get; set; } = new();
+
+    /// <summary>Original report IDs retained when several reports become one case.</summary>
+    [JsonPropertyName("sourceReportIds")]
+    public List<string> SourceReportIds { get; set; } = new();
 
     [JsonPropertyName("evidence")]
     public List<IncidentEvidence> Evidence { get; set; } = new();
@@ -82,6 +157,10 @@ public sealed class IncidentReport
 
     [JsonPropertyName("trackSection")]
     public string TrackSection { get; set; } = string.Empty;
+
+    [JsonPropertyName("sector")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Sector { get; set; }
 
     [JsonPropertyName("incidentType")]
     public IncidentType IncidentType { get; set; } = IncidentType.Other;
@@ -121,6 +200,9 @@ public sealed class IncidentReport
 
     public static string? Validate(IncidentReport report)
     {
+        if (report.IncidentParticipants == null || report.Reporters == null || report.Evidence == null
+            || report.History == null || report.SourceReportIds == null)
+            return "Invalid incident collection.";
         if (string.IsNullOrWhiteSpace(report.SessionId))
             return "Zgłoszenie wymaga aktywnej sesji.";
         if (report.Source != IncidentSource.Auto && string.IsNullOrWhiteSpace(report.ReporterId))
@@ -133,12 +215,29 @@ public sealed class IncidentReport
             return "Opis incydentu jest wymagany.";
         if (report.Description.Trim().Length > 600)
             return "Opis incydentu może mieć maksymalnie 600 znaków.";
-        if (report.TrackSection.Length > 80 || report.Participants.Length > 160)
+        if ((report.TrackSection?.Length ?? 0) > 80 || (report.Participants?.Length ?? 0) > 160)
             return "Jedno z pól formularza jest zbyt długie.";
         if (report.Lap < 0)
             return "Numer okrążenia nie może być ujemny.";
         return null;
     }
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum IncidentCaseStatus
+{
+    New,
+    Reviewing,
+    Closed
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum IncidentDecision
+{
+    Pending,
+    NoFurtherAction,
+    Warning,
+    Penalty
 }
 
 public sealed class IncidentHistoryEntry
@@ -148,6 +247,12 @@ public sealed class IncidentHistoryEntry
     public string Action { get; set; } = string.Empty;
     public IncidentStatus? PreviousStatus { get; set; }
     public IncidentStatus? NewStatus { get; set; }
+    public IncidentCaseStatus? PreviousCaseStatus { get; set; }
+    public IncidentCaseStatus? NewCaseStatus { get; set; }
+    public IncidentDecision? PreviousDecision { get; set; }
+    public IncidentDecision? NewDecision { get; set; }
+    public string? PreviousAssignedSteward { get; set; }
+    public string? NewAssignedSteward { get; set; }
     public string Note { get; set; } = string.Empty;
 }
 
@@ -173,6 +278,7 @@ public sealed class IncidentParticipant
     public int VehicleId { get; set; }
     public string DriverName { get; set; } = string.Empty;
     public string? CarNumber { get; set; }
+    public string? RaceClass { get; set; }
     public IncidentVector3? Position { get; set; }
     public IncidentVector3? Velocity { get; set; }
     public double? SpeedKmh { get; set; }

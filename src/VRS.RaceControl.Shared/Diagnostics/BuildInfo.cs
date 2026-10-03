@@ -4,11 +4,18 @@ namespace VRS.RaceControl.Shared.Diagnostics;
 
 public static class BuildInfo
 {
-    public const string DisplayVersion = "Beta 5.3.F";
+    public static string DisplayVersion
+    {
+        get
+        {
+            var version = typeof(BuildInfo).Assembly.GetName().Version ?? new Version(1, 1, 2, 0);
+            return version.ToString(3);
+        }
+    }
 
     public static string InformationalVersion =>
         typeof(BuildInfo).Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
             ?.InformationalVersion
-        ?? "5.3.0-beta.F";
+        ?? "1.1.2";
 }

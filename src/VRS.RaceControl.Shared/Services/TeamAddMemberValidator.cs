@@ -36,7 +36,7 @@ public static class TeamAddMemberValidator
         }
 
         var permission = leagueProfile?.FindMemberPermission(requester.Team, requester.Login);
-        if (permission == null || !permission.CanAddMembers)
+        if (permission == null || !(permission.CanAddMembers || permission.IsCeo))
         {
             return (TeamAddMemberValidationOutcome.PermissionDenied, null);
         }
