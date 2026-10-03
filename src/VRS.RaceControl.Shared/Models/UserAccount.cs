@@ -13,6 +13,9 @@ public class UserAccount
     [JsonPropertyName("id")]
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
 
+    [JsonPropertyName("onlineUserId")]
+    public string? OnlineUserId { get; set; }
+
     [JsonPropertyName("driverName")]
     public string DriverName { get; set; } = string.Empty;
 
@@ -25,6 +28,9 @@ public class UserAccount
     [JsonPropertyName("leagueId")]
     public string LeagueId { get; set; } = "vrs";
 
+    [JsonPropertyName("seriesCode")]
+    public string SeriesCode { get; set; } = LeagueProfile.DefaultId;
+
     [JsonPropertyName("seasonId")]
     public string SeasonId { get; set; } = "default";
 
@@ -36,6 +42,12 @@ public class UserAccount
 
     [JsonPropertyName("licenseCategory")]
     public string LicenseCategory { get; set; } = string.Empty;
+
+    [JsonPropertyName("raceClass")]
+    public string RaceClass { get; set; } = string.Empty;
+
+    [JsonPropertyName("raceClasses")]
+    public List<string> RaceClasses { get; set; } = new();
 
     [JsonPropertyName("safetyRating")]
     public double SafetyRating { get; set; }
@@ -57,6 +69,12 @@ public class UserAccount
 
     [JsonPropertyName("status")]
     public AccountStatus Status { get; set; } = AccountStatus.Active;
+
+    [JsonPropertyName("restrictedUntil")]
+    public DateTime? RestrictedUntil { get; set; }
+
+    [JsonPropertyName("purgeAfter")]
+    public DateTime? PurgeAfter { get; set; }
 
     [JsonPropertyName("lastLoginAt")]
     public DateTime? LastLoginAt { get; set; }
@@ -128,7 +146,10 @@ public enum AccountStatus
     Active,
     Inactive,
     Suspended,
-    PendingReset
+    Blocked,
+    PendingReset,
+    Restricted,
+    PendingDelete
 }
 
 public class SafeAccountStatusConverter : JsonConverter<AccountStatus>

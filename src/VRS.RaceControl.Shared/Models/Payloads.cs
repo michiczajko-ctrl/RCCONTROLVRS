@@ -8,6 +8,9 @@ namespace VRS.RaceControl.Shared.Models;
 /// </summary>
 public class FlagPayload
 {
+    public PanelFlashMode FlashMode { get; set; } = PanelFlashMode.Steady;
+    /// <summary>Same event as the companion snapshot; recovers a lost panel message.</summary>
+    public RaceControlPanelStatePayload? PanelState { get; set; }
     [JsonPropertyName("flagType")]
     public FlagType FlagType { get; set; }
 
@@ -31,6 +34,9 @@ public class FlagPayload
 /// </summary>
 public class PenaltyPayload
 {
+    public string? IncidentId { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IncidentPenaltyCommit? IncidentCommit { get; set; }
     [JsonPropertyName("penaltyType")]
     public PenaltyType PenaltyType { get; set; }
 
@@ -53,6 +59,47 @@ public class PenaltyPayload
 
     [JsonPropertyName("displayDurationMs")]
     public int DisplayDurationMs { get; set; } = 10000;
+
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+
+    [JsonPropertyName("createdAtUtc")]
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// Durable UserAccount.Id this penalty is filed against — resolved HOST-side by the
+    /// same name-matching MainViewModel.SendPenalty/OnDriverConnected already use, never
+    /// trusted from anywhere else. Empty when the driver has no linked UserAccount.
+    /// </summary>
+    [JsonPropertyName("accountId")]
+    public string AccountId { get; set; } = string.Empty;
+
+    [JsonPropertyName("sessionCode")]
+    public string SessionCode { get; set; } = string.Empty;
+}
+
+public sealed record IncidentPenaltyCommit(string CaseId, long ExpectedRevision, string StewardNote,
+    string AssignedSteward, string ResponseToDriver)
+{
+    public bool IsValid => !string.IsNullOrWhiteSpace(CaseId) && CaseId.Length <= 80 && ExpectedRevision >= 0
+        && StewardNote != null && StewardNote.Length <= 1000 && AssignedSteward != null && AssignedSteward.Length <= 120
+        && ResponseToDriver != null && ResponseToDriver.Length <= 600;
+}
+
+/// <summary>
+/// HOST → one connected driver: that driver's full penalty history, filtered by their
+/// resolved UserAccount.Id. Pushed once on connect (MainViewModel.OnDriverConnected),
+/// mirroring DriverProfilePayload/TeamEconomySnapshotPayload's single-driver-targeted
+/// pattern — unlike IncidentSnapshotPayload, this is never broadcast.
+/// </summary>
+public sealed class PenaltyHistorySnapshotPayload
+{
+    [JsonPropertyName("penalties")]
+    public List<PenaltyPayload> Penalties { get; set; } = new();
+    public AuthorityPenaltyCursor? NextCursor { get; set; }
+    public bool HistoryComplete { get; set; } = true;
+    public string? Error { get; set; }
+    public Guid? RequestId { get; set; }
 }
 
 /// <summary>
@@ -73,6 +120,8 @@ public class JoinRequestPayload
 /// </summary>
 public class JoinPayload
 {
+    [JsonPropertyName("clientVersion")]
+    public string ClientVersion { get; set; } = string.Empty;
     [JsonPropertyName("driverName")]
     public string DriverName { get; set; } = string.Empty;
 
@@ -101,6 +150,11 @@ public class JoinPayload
 /// </summary>
 public class JoinAckPayload
 {
+    [JsonPropertyName("relayVersion")]
+    public string RelayVersion { get; set; } = string.Empty;
+
+    [JsonPropertyName("minimumProtocolVersion")]
+    public string MinimumProtocolVersion { get; set; } = Protocol.ProtocolMessage.CurrentProtocolVersion;
     [JsonPropertyName("driverId")]
     public string DriverId { get; set; } = string.Empty;
 
@@ -117,6 +171,8 @@ public class JoinAckPayload
 /// </summary>
 public class JoinRejectPayload
 {
+    public bool? Retryable { get; set; }
+    public string? Code { get; set; }
     [JsonPropertyName("reason")]
     public string Reason { get; set; } = string.Empty;
 }
@@ -296,6 +352,8 @@ public sealed class DriverProfilePayload
     public string Team { get; set; } = string.Empty;
     public string Affiliation { get; set; } = string.Empty;
     public string LicenseCategory { get; set; } = string.Empty;
+    public string RaceClass { get; set; } = string.Empty;
+    public List<string> RaceClasses { get; set; } = new();
     public double SafetyRating { get; set; }
     public int SeasonRaceCount { get; set; }
     public int SeasonRaceLimit { get; set; }
@@ -312,6 +370,8 @@ public sealed class DriverProfilePayload
     public bool CanManageEconomy { get; set; }
     public bool CanAddMembers { get; set; }
     public bool IsCeo { get; set; }
+    public List<string> CeoTeamIds { get; set; } = new();
+    public List<TeamJoinRequestEntry>? CeoPendingJoinRequests { get; set; }
 
     public static DriverProfilePayload FromAccount(UserAccount account, LeagueProfile? leagueProfile = null)
     {
@@ -327,6 +387,8 @@ public sealed class DriverProfilePayload
             Team = account.Team,
             Affiliation = account.Affiliation,
             LicenseCategory = account.LicenseCategory,
+            RaceClass = account.RaceClass,
+            RaceClasses = account.RaceClasses.ToList(),
             SafetyRating = account.SafetyRating,
             SeasonRaceCount = account.SeasonRaceCount,
             SeasonRaceLimit = account.SeasonRaceLimit,
@@ -337,7 +399,12 @@ public sealed class DriverProfilePayload
             CanAnnounce = permission?.CanAnnounce ?? false,
             CanManageEconomy = permission?.CanManageEconomy ?? false,
             CanAddMembers = permission?.CanAddMembers ?? false,
-            IsCeo = permission?.IsCeo ?? false
+            IsCeo = permission?.IsCeo ?? false,
+            CeoTeamIds = leagueProfile?.CeoTeamIds(account.Login) ?? new(),
+            CeoPendingJoinRequests = leagueProfile == null ? null : leagueProfile.PendingJoinRequests
+                .Where(entry => leagueProfile.CeoTeamIds(account.Login)
+                    .Contains(leagueProfile.ResolveTeamId(entry.TeamName) ?? string.Empty,
+                        StringComparer.OrdinalIgnoreCase)).ToList()
         };
     }
 }
@@ -503,6 +570,8 @@ public sealed class TeamHubAuthPayload
     public string Login { get; set; } = string.Empty;
     [JsonPropertyName("authToken")]
     public string AuthToken { get; set; } = string.Empty;
+    [JsonPropertyName("ticket")]
+    public string Ticket { get; set; } = string.Empty;
 }
 
 /// <summary>Host → driver result of a <see cref="TeamHubAuthPayload"/> attempt.</summary>

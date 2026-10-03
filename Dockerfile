@@ -1,14 +1,19 @@
 # ─── Stage 1: Build ───────────────────────────────────────────────────────────
 FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 WORKDIR /src
+ARG RELAY_VERSION=1.2.0-r2preview
 
-# Restore only project metadata first so Docker can cache dependencies.
+# Build from the repository root:
+# docker build -f src/VRS.RaceControl.Relay/Dockerfile .
+COPY ["Directory.Build.props", "./"]
 COPY ["src/VRS.RaceControl.Relay/VRS.RaceControl.Relay.csproj", "src/VRS.RaceControl.Relay/"]
 COPY ["src/VRS.RaceControl.Shared/VRS.RaceControl.Shared.csproj", "src/VRS.RaceControl.Shared/"]
 RUN dotnet restore "src/VRS.RaceControl.Relay/VRS.RaceControl.Relay.csproj"
 
 COPY . .
-RUN dotnet publish "src/VRS.RaceControl.Relay/VRS.RaceControl.Relay.csproj" -c Release -o /app/publish --no-restore
+RUN dotnet publish "src/VRS.RaceControl.Relay/VRS.RaceControl.Relay.csproj" -c Release -o /app/publish --no-restore \
+    -p:Version=$RELAY_VERSION -p:InformationalVersion=$RELAY_VERSION \
+    -p:AssemblyVersion=1.2.0.0 -p:FileVersion=1.2.0.0
 
 # ─── Stage 2: Runtime ─────────────────────────────────────────────────────────
 FROM mcr.microsoft.com/dotnet/aspnet:9.0-alpine AS runtime

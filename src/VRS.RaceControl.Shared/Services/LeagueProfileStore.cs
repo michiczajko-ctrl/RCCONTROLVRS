@@ -1,10 +1,12 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using VRS.RaceControl.Shared.Models;
 
 namespace VRS.RaceControl.Shared.Services;
 
 public sealed class LeagueProfileStore
 {
+    public const int CurrentSchemaVersion = 4;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -17,11 +19,14 @@ public sealed class LeagueProfileStore
 
     public LeagueProfileStore(string? filePath = null, SyncOutboxStore? outbox = null)
     {
-        _filePath = filePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "VRSRaceControl",
-            "config",
-            "league-profiles.json");
+        var configuredRoot = Environment.GetEnvironmentVariable("VRS_RACE_CONTROL_DATA_ROOT");
+        _filePath = filePath ?? (!string.IsNullOrWhiteSpace(configuredRoot)
+            ? Path.Combine(configuredRoot, "config", "league-profiles.json")
+            : Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "VRSRaceControl",
+                "config",
+                "league-profiles.json"));
         _outbox = outbox ?? new SyncOutboxStore(filePath == null
             ? null
             : Path.Combine(Path.GetDirectoryName(_filePath) ?? string.Empty, "sync-outbox.json"));
@@ -141,7 +146,19 @@ public sealed class LeagueProfileStore
         }
     }
 
-    public void Save(LeagueProfile profile, bool makeActive = true)
+    public void Activate(string profileId)
+    {
+        lock (_sync)
+        {
+            var configuration = LoadConfigurationUnsafe();
+            if (!configuration.Profiles.Any(p => p.Id == profileId)) return;
+            configuration.ActiveProfileId = profileId;
+            SaveConfigurationUnsafe(configuration);
+        }
+    }
+
+    public void Save(LeagueProfile profile, bool makeActive = true, long? expectedRevision = null,
+        string updatedBy = "HOST")
     {
         var validationError = profile.Validate();
         if (validationError != null)
@@ -154,6 +171,14 @@ public sealed class LeagueProfileStore
             var configuration = LoadConfigurationUnsafe();
             var index = configuration.Profiles.FindIndex(item =>
                 item.Id.Equals(profile.Id, StringComparison.OrdinalIgnoreCase));
+            var currentRevision = index >= 0 ? configuration.Profiles[index].Revision : 0;
+            if (expectedRevision.HasValue && expectedRevision.Value != currentRevision)
+            {
+                throw new LeagueConfigurationConflictException(expectedRevision.Value, currentRevision);
+            }
+            profile.Revision = Math.Max(currentRevision, profile.Revision) + 1;
+            profile.UpdatedAtUtc = DateTime.UtcNow;
+            profile.UpdatedBy = string.IsNullOrWhiteSpace(updatedBy) ? "HOST" : updatedBy.Trim();
             if (index >= 0)
             {
                 configuration.Profiles[index] = profile;
@@ -177,7 +202,7 @@ public sealed class LeagueProfileStore
     /// cloud-sync pull loop so applying a pull can't re-trigger a push of the
     /// same record it just pulled.
     /// </summary>
-    public void SyncProfile(LeagueProfile remoteProfile)
+    public void SyncProfile(LeagueProfile remoteProfile, bool acceptOlderRevision = false)
     {
         if (remoteProfile == null)
         {
@@ -191,6 +216,10 @@ public sealed class LeagueProfileStore
                 item.Id.Equals(remoteProfile.Id, StringComparison.OrdinalIgnoreCase));
             if (index >= 0)
             {
+                if (!acceptOlderRevision && remoteProfile.Revision < configuration.Profiles[index].Revision)
+                {
+                    return;
+                }
                 configuration.Profiles[index] = remoteProfile;
             }
             else
@@ -241,15 +270,65 @@ public sealed class LeagueProfileStore
                 JsonOptions);
             if (configuration == null || configuration.Profiles.Count == 0)
             {
-                return LeagueProfileConfiguration.Defaults();
+                throw new InvalidDataException("League profile file does not contain any profiles.");
+            }
+            var migrated = false;
+            foreach (var profile in configuration.Profiles)
+            {
+                if (profile.LicenseDefinitions.Count == 0 && profile.Licenses.Count > 0)
+                {
+                    profile.LicenseDefinitions = profile.Licenses
+                        .Where(code => !string.IsNullOrWhiteSpace(code))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Select(code => new LeagueLicenseDefinition { Code = code.Trim(), Name = code.Trim() })
+                        .ToList();
+                    migrated = true;
+                }
+                else if (profile.LicenseDefinitions.Count > 0)
+                {
+                    profile.Licenses = profile.LicenseDefinitions.Select(item => item.Code).ToList();
+                }
+                profile.SeasonDefinitions ??= new List<LeagueSeasonDefinition>();
+                var seasons = profile.Seasons.Count > 0 ? profile.Seasons : new List<string> { "default" };
+                var definitions = profile.SeasonDefinitions
+                    .Where(item => !string.IsNullOrWhiteSpace(item.Id))
+                    .GroupBy(item => item.Id, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+                if (profile.SeasonDefinitions.Count == 0 || seasons.Any(season => !definitions.ContainsKey(season)))
+                {
+                    var hadDefinitions = definitions.Count > 0;
+                    profile.SeasonDefinitions = seasons.Select((season, index) => definitions.TryGetValue(season, out var definition)
+                        ? definition
+                        : new LeagueSeasonDefinition
+                        {
+                            Id = season,
+                            Name = season,
+                            Races = !hadDefinitions && index == 0 ? profile.SeasonRaces.ToList() : new List<LeagueRace>()
+                        }).ToList();
+                    profile.Seasons = seasons;
+                    migrated = true;
+                }
+            }
+            if (configuration.SchemaVersion < CurrentSchemaVersion)
+            {
+                var backupPath = _filePath + $".backup-v{configuration.SchemaVersion}";
+                if (!File.Exists(backupPath)) File.Copy(_filePath, backupPath);
+                configuration.SchemaVersion = CurrentSchemaVersion;
+                SaveConfigurationUnsafe(configuration);
+            }
+            else if (migrated)
+            {
+                SaveConfigurationUnsafe(configuration);
             }
             return configuration;
         }
-        catch (JsonException)
+        catch (JsonException exception)
         {
             var invalidPath = _filePath + $".invalid-{DateTime.UtcNow:yyyyMMddHHmmss}";
-            File.Move(_filePath, invalidPath, overwrite: false);
-            return LeagueProfileConfiguration.Defaults();
+            File.Copy(_filePath, invalidPath, overwrite: false);
+            throw new InvalidDataException(
+                $"League profiles could not be read. The original file was preserved and a diagnostic copy was written to '{invalidPath}'.",
+                exception);
         }
     }
 
@@ -267,11 +346,15 @@ public sealed class LeagueProfileStore
 
     private sealed class LeagueProfileConfiguration
     {
+        public int SchemaVersion { get; set; }
         public string ActiveProfileId { get; set; } = LeagueProfile.DefaultId;
         public List<LeagueProfile> Profiles { get; set; } = new();
+        [JsonExtensionData]
+        public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 
         public static LeagueProfileConfiguration Defaults() => new()
         {
+            SchemaVersion = CurrentSchemaVersion,
             Profiles = new List<LeagueProfile> { LeagueProfile.CreateDefault() }
         };
     }

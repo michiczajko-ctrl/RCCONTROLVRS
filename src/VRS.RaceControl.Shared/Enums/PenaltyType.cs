@@ -15,5 +15,7 @@ public enum PenaltyType
     TimePenalty10s = 7,
     TimePenalty30s = 8,
     StopAndGo5s = 9,
-    StopAndGo10s = 10
+    StopAndGo10s = 10,
+    /// <summary>Investigation closed with no penalty. Appended last — PenaltyStore persists the numeric values.</summary>
+    NoFurtherAction = 11
 }

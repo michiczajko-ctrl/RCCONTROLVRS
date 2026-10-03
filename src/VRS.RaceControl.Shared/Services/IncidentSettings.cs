@@ -41,9 +41,7 @@ public sealed class IncidentSettingsStore
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly string _path;
 
-    public IncidentSettingsStore(string? path = null) => _path = path ?? Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "VRSRaceControl", "incident-settings.json");
+    public IncidentSettingsStore(string? path = null) => _path = path ?? LocalEnvironmentPaths.DataPath("incident-settings.json");
 
     public IncidentSettings Load()
     {

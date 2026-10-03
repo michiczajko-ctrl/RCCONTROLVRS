@@ -17,6 +17,11 @@ public class DriverInfo : INotifyPropertyChanged
     [JsonPropertyName("name")]
     public string Name { get; set; } = string.Empty;
 
+    /// <summary>Relay-confirmed auth user ID. Null for LAN and older relays; never supplied by a driver display name.</summary>
+    [JsonPropertyName("accountUserId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AccountUserId { get; set; }
+
     [JsonPropertyName("connectedAt")]
     public DateTime ConnectedAt { get; set; } = DateTime.UtcNow;
 
@@ -47,7 +52,7 @@ public class DriverInfo : INotifyPropertyChanged
     [JsonIgnore]
     public bool HasVersionMismatch =>
         !string.IsNullOrEmpty(AppVersion)
-        && !string.Equals(AppVersion, BuildInfo.DisplayVersion, StringComparison.OrdinalIgnoreCase);
+        && !string.Equals(AppVersion.Trim().StartsWith("V ", StringComparison.OrdinalIgnoreCase) ? AppVersion.Trim()[2..].Trim() : AppVersion.Trim(), BuildInfo.DisplayVersion, StringComparison.OrdinalIgnoreCase);
 
     public event PropertyChangedEventHandler? PropertyChanged;
 }

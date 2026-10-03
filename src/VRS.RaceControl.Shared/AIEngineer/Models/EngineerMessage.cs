@@ -15,9 +15,14 @@ public sealed class EngineerMessage
     public string? RecordedAudioCueKey { get; init; }
     public string? SourceMessageId { get; init; }
     public string? SupersessionKey { get; init; }
+    public long? MonotonicExpiryTimestamp { get; init; }
+    public long? AuthorityGeneration { get; init; }
+    public long? AuthorityRevision { get; init; }
+    public string? ClockEpoch { get; init; }
 
     public string GetText(EngineerLanguage language = EngineerLanguage.English) => TextEn;
 
     public bool IsExpired(DateTime nowUtc) =>
-        ExpiresAfter.HasValue && nowUtc - TimestampUtc > ExpiresAfter.Value;
+        MonotonicExpiryTimestamp is { } expiry ? System.Diagnostics.Stopwatch.GetTimestamp() >= expiry
+            : ExpiresAfter.HasValue && nowUtc - TimestampUtc > ExpiresAfter.Value;
 }

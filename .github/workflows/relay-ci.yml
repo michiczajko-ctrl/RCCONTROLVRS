@@ -1,0 +1,14 @@
+name: Relay build
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  linux-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the same image used by Render
+        run: docker build --tag racecontrol-relay:check --file src/VRS.RaceControl.Relay/Dockerfile .

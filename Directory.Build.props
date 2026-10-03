@@ -1,11 +1,11 @@
 <Project>
   <PropertyGroup>
-    <Version>5.3.0-beta.F</Version>
-    <VersionPrefix>5.3.0</VersionPrefix>
-    <VersionSuffix>beta.F</VersionSuffix>
-    <AssemblyVersion>5.3.0.0</AssemblyVersion>
-    <FileVersion>5.3.0.0</FileVersion>
-    <InformationalVersion>5.3.0-beta.F</InformationalVersion>
-    <Product>VRS Race Control Beta 5.3.F</Product>
+    <Version>1.1.2</Version>
+    <VersionPrefix>1.1.2</VersionPrefix>
+    <VersionSuffix></VersionSuffix>
+    <AssemblyVersion>1.1.2.0</AssemblyVersion>
+    <FileVersion>1.1.2.0</FileVersion>
+    <InformationalVersion>1.1.2</InformationalVersion>
+    <Product>VRS Race Control 1.1.2</Product>
   </PropertyGroup>
 </Project>

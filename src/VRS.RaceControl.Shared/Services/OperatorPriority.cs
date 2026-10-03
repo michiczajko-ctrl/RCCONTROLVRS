@@ -28,6 +28,43 @@ public sealed class OperatorPriority
             return new(MainId, ControllerId, Generation, Revision, PendingControllerId,
                 _seats.Values.OrderBy(seat => seat.Id, StringComparer.Ordinal).ToArray());
     }
+    /// <summary>
+    /// Restores authority read from the server-side durable session record. The main
+    /// seat starts disconnected and can reconnect without changing the persisted
+    /// generation. Callers must only supply data authenticated by the relay backend.
+    /// </summary>
+    public void RestoreDurableAuthority(long generation, long revision)
+    {
+        if (generation < 1) throw new ArgumentOutOfRangeException(nameof(generation));
+        if (revision < 0) throw new ArgumentOutOfRangeException(nameof(revision));
+        lock (_gate)
+        {
+            var main = _seats[MainId];
+            _seats[MainId] = main with { IsConnected = false };
+            ControllerId = MainId;
+            PendingControllerId = null;
+            Generation = generation;
+            Revision = Math.Max(1, revision);
+        }
+    }
+
+    /// <summary>
+    /// Recreates a secondary seat from a freshly validated server-issued session
+    /// token after relay restart. This does not grant more than the token role permits.
+    /// </summary>
+    public bool RestoreTrustedSeat(string id, string name, OperatorRole role,
+        OperatorPermissions permissions, DateTime now)
+    {
+        lock (_gate)
+        {
+            if (string.IsNullOrWhiteSpace(id) || id == MainId || string.IsNullOrWhiteSpace(name)
+                || role == OperatorRole.MainHost) return false;
+            permissions = NormalizePermissions(role, permissions);
+            _seats[id] = new(id, name.Trim(), role, permissions, now, true);
+            Revision++;
+            return true;
+        }
+    }
     public bool Approve(string actor, string id, string name, OperatorPermissions permissions, DateTime now)
         => Approve(actor, id, name, RoleFor(permissions), permissions, now);
     public bool Approve(string actor, string id, string name, OperatorRole role,
@@ -70,6 +107,53 @@ public sealed class OperatorPriority
             SetControllerLocked(target);
             Revision++;
             return true;
+        }
+    }
+    public bool TakeOwnership(string actor, long expectedGeneration, DateTime now)
+    {
+        lock (_gate)
+        {
+            if (_seats[MainId].IsConnected || expectedGeneration != Generation
+                || !CanControlLocked(actor, now)) return false;
+            PendingControllerId = null;
+            SetControllerLocked(actor);
+            Revision++;
+            return true;
+        }
+    }
+    public bool CanTakeOwnership(string actor, long expectedGeneration, DateTime now)
+    {
+        lock (_gate)
+            return !_seats[MainId].IsConnected && expectedGeneration == Generation
+                && CanControlLocked(actor, now);
+    }
+    public bool CanReturnToMain(string actor, long expectedGeneration)
+    {
+        lock (_gate)
+            return actor == MainId && _seats[MainId].IsConnected
+                && expectedGeneration == Generation;
+    }
+    public bool ReturnToMain(string actor, long expectedGeneration)
+    {
+        lock (_gate)
+        {
+            if (actor != MainId || !_seats[MainId].IsConnected
+                || expectedGeneration != Generation) return false;
+            SetControllerLocked(MainId);
+            Revision++;
+            return true;
+        }
+    }
+    /// <summary>The database transaction has already committed this owner and generation.</summary>
+    public void ApplyDurableOwnership(string owner, long generation, long revision)
+    {
+        lock (_gate)
+        {
+            ControllerId = _seats.TryGetValue(owner, out var seat) && seat.IsConnected
+                ? owner : null;
+            Generation = generation;
+            Revision = Math.Max(Revision + 1, revision);
+            PendingControllerId = null;
         }
     }
     public bool RequestControl(string actor, DateTime now)

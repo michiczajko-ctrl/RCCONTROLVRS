@@ -32,11 +32,7 @@ public sealed class EconomyLedgerStore
 
     public EconomyLedgerStore(string? filePath = null, SyncOutboxStore? outbox = null)
     {
-        _filePath = filePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "VRSRaceControl",
-            "data",
-            "economy-ledger.json");
+        _filePath = filePath ?? LocalEnvironmentPaths.DataPath("data", "economy-ledger.json");
         _outbox = outbox ?? new SyncOutboxStore(filePath == null
             ? null
             : Path.Combine(Path.GetDirectoryName(_filePath) ?? string.Empty, "sync-outbox.json"));
