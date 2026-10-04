@@ -94,7 +94,7 @@ app.MapGet("/", async (Microsoft.AspNetCore.Http.HttpContext context) =>
         .Concat(authorityEnabled && authorityStore?.SchemaReady == true && durableRepository.IsEnabled && incidentRepository.IsEnabled
             ? new[] { ProtocolCapabilities.SessionAuthority, ProtocolCapabilities.ScheduledPanelAudio,
                 ProtocolCapabilities.IncidentEvidence, ProtocolCapabilities.SharedTrackDefinitions, ProtocolCapabilities.DetailedTelemetry,
-                ProtocolCapabilities.AtomicIncidentPenalty }
+                ProtocolCapabilities.AtomicIncidentPenalty, ProtocolCapabilities.AdvancedTelemetryRules }
             : Array.Empty<string>()).ToArray(),
     activeSessions = sessions.Count,
     durableSessionStore = durableRepository.Status,
@@ -201,9 +201,12 @@ app.Map("/vrs", async context =>
             if (!replayGuard.TryAccept(identity.TokenId, identity.ExpiresAt)
                 || !accountJoinLimiter.TryAcquire(identity.UserId))
             {
+                // Every reconnect attempt fetches a fresh token, so a replayed token or a tripped limiter is transient.
+                app.Logger.LogWarning("Relay join rejected: session={Session} role={Role} code={Code} retryable={Retryable}",
+                    identity.SessionId, identity.Role, "token_replayed_or_rate_limited", true);
                 await RelayWebSockets.RejectAsync(
                     socket, "Token połączenia został już użyty albo przekroczono limit prób.",
-                    limits.MaxMessageBytes, context.RequestAborted);
+                    limits.MaxMessageBytes, context.RequestAborted, retryable: true, code: "token_replayed_or_rate_limited");
                 return;
             }
             sessionCode = identity.SessionId;
@@ -271,7 +274,7 @@ app.Map("/vrs", async context =>
                         {
                             session = sessions.GetOrAdd(sessionCode,
                                 code => new RelaySession(code, limits.MaxClientsPerSession,
-                                    durableRepository, durableState, incidentRepository));
+                                    durableRepository, durableState, incidentRepository) { Log = app.Logger });
                         }
                     }
                 }
@@ -339,7 +342,7 @@ app.Map("/vrs", async context =>
                     session = sessions.GetOrAdd(
                         sessionCode,
                         code => new RelaySession(code, limits.MaxClientsPerSession,
-                            durableRepository, incidentRepository: incidentRepository));
+                            durableRepository, incidentRepository: incidentRepository) { Log = app.Logger });
                 }
             }
 
@@ -394,14 +397,15 @@ app.Map("/vrs", async context =>
                 ProtocolCapabilities.FleetTelemetry, StringComparer.Ordinal) == true,
                 SupportsAuthority = session.RequiresAuthority };
 
-        if (!session.TryAddClient(client, out var rejectionReason))
+        if (!session.TryAddClient(client, out var rejectionReason, out var rejectionRetryable, out var rejectionCode))
         {
+            app.Logger.LogWarning("Relay join rejected: session={Session} role={Role} code={Code} retryable={Retryable}",
+                sessionCode, client.Role, rejectionCode, rejectionRetryable?.ToString() ?? "unspecified");
             await RelayWebSockets.RejectAsync(
                 socket,
                 rejectionReason,
                 limits.MaxMessageBytes,
-                context.RequestAborted, retryable: client.Role == "driver" && session.Host == null,
-                code: client.Role == "driver" && session.Host == null ? "host_unavailable" : "join_rejected");
+                context.RequestAborted, retryable: rejectionRetryable, code: rejectionCode);
             if (session.ClientCount == 0 && !session.CanSurviveHostDisconnect)
             {
                 sessions.TryRemove(sessionCode, out _);
@@ -757,7 +761,7 @@ public static class RelayWebSockets
         WebSocket socket,
         string reason,
         int maxMessageBytes,
-        CancellationToken cancellationToken, bool retryable = false, string? code = null)
+        CancellationToken cancellationToken, bool? retryable = false, string? code = null)
     {
         var rejection = ProtocolMessage.Create(
             MessageType.JoinReject,
@@ -861,7 +865,7 @@ public sealed class RelayClient : IDisposable
         if (SupportsFleetTelemetry) capabilities.Add(ProtocolCapabilities.FleetTelemetry);
         if (SupportsAuthority) capabilities.AddRange([ProtocolCapabilities.SessionAuthority, ProtocolCapabilities.ScheduledPanelAudio,
             ProtocolCapabilities.IncidentEvidence, ProtocolCapabilities.SharedTrackDefinitions, ProtocolCapabilities.DetailedTelemetry,
-            ProtocolCapabilities.AtomicIncidentPenalty]);
+            ProtocolCapabilities.AtomicIncidentPenalty, ProtocolCapabilities.AdvancedTelemetryRules]);
         return capabilities.ToArray();
     }
 
@@ -985,34 +989,54 @@ public sealed partial class RelaySession
         RelayLimits.DeduplicationCapacityPerSession);
 
     public bool TryAddClient(RelayClient client, out string rejectionReason)
+        => TryAddClient(client, out rejectionReason, out _, out _);
+
+    /// <summary>
+    /// <paramref name="retryable"/>: true = the client should keep reconnecting with a fresh token, false = permanent,
+    /// null = unspecified (a driver that never joined this session stops, one that was connected before keeps retrying).
+    /// </summary>
+    public bool TryAddClient(RelayClient client, out string rejectionReason, out bool? retryable, out string rejectionCode)
     {
         lock (_membershipGate)
         {
+            retryable = false; rejectionCode = "join_rejected";
             if (RequiresAuthority && (_authority == null || !client.SupportsAuthority))
             {
                 rejectionReason = "This session requires an initialized v3 authority and compatible client.";
+                rejectionCode = "authority_client_required";
                 return false;
             }
             if (_clients.Count >= _maxClients)
             {
                 rejectionReason = "Ta sesja osiągnęła limit połączonych kierowców.";
+                rejectionCode = "session_full";
+                retryable = client.Role == "driver" && Host == null;
                 return false;
             }
             if (_clients.Values.Any(existing =>
                 string.Equals(existing.UserId, client.UserId, StringComparison.Ordinal)))
             {
+                // After a network drop the previous socket stays registered until the Relay heartbeat cutoff
+                // (about 75 s), so the same account reconnecting must be retried, not abandoned.
+                // A driver client decides itself (stops on its first-ever join, so a second PC gets a clear error).
                 rejectionReason = "To konto jest już połączone z sesją.";
+                rejectionCode = "account_already_connected";
+                if (client.Role != "driver" || Host == null) retryable = true;
+                else retryable = null;
                 return false;
             }
             if (client.Role == "host" && Host != null)
             {
+                // A different account (the same account is rejected above), so waiting does not help.
                 rejectionReason = "HOST dla tej sesji jest już połączony.";
+                rejectionCode = "host_already_connected";
                 return false;
             }
             if (client.Role == "host" && _mainUserId != null
                 && !string.Equals(_mainUserId, client.UserId, StringComparison.Ordinal))
             {
                 rejectionReason = "Tylko właściciel sesji może ponownie połączyć główny HOST.";
+                rejectionCode = "host_owner_required";
                 return false;
             }
             if (RequiresAuthority && RelayRoles.IsSecondaryOperator(client.Role)) RestoreAuthorityApproval(client);
@@ -1027,6 +1051,8 @@ public sealed partial class RelaySession
             if (client.Role == "driver" && Host == null && _authority == null)
             {
                 rejectionReason = "Główny HOST jest niedostępny; zdalni kierowcy nie mogą teraz dołączyć.";
+                rejectionCode = "host_unavailable";
+                retryable = true;
                 return false;
             }
             if (RelayRoles.IsSecondaryOperator(client.Role) && Host == null
@@ -1034,6 +1060,7 @@ public sealed partial class RelaySession
                     || _operatorPriority?.Snapshot().Operators.All(seat => seat.Id != client.UserId) != false))
             {
                 rejectionReason = "Główny HOST jest niedostępny; tylko wcześniej zatwierdzony operator może wrócić do sesji.";
+                rejectionCode = "operator_not_approved";
                 return false;
             }
             if (RelayRoles.IsSecondaryOperator(client.Role)
@@ -1041,6 +1068,7 @@ public sealed partial class RelaySession
                     || (Host != null && !Host.SupportsMultiHost)))
             {
                 rejectionReason = "Ta sesja nie obsługuje operatorów multi-HOST.";
+                rejectionCode = "multi_host_unsupported";
                 return false;
             }
 

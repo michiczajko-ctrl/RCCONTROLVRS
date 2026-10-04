@@ -5,7 +5,7 @@ using System.Globalization;
 using VRS.RaceControl.Shared.Models;
 
 /// <summary>Server-only PostgreSQL compare-and-exchange authority storage.</summary>
-public sealed class SupabaseAuthorityStore : IAuthorityStore
+public sealed partial class SupabaseAuthorityStore : IAuthorityStore
 {
     public const string RequiredSchemaVersion = "r2-atomic-incident-penalty-v1";
     private readonly SemaphoreSlim _schemaProbeGate = new(1, 1);
@@ -48,7 +48,7 @@ public sealed class SupabaseAuthorityStore : IAuthorityStore
         var key = Environment.GetEnvironmentVariable("SUPABASE_SECRET_KEY")
             ?? Environment.GetEnvironmentVariable("SUPABASE_SERVICE_ROLE_KEY");
         return Uri.TryCreate(url, UriKind.Absolute, out var endpoint) && !string.IsNullOrWhiteSpace(key)
-            ? new(endpoint, key) : null;
+            ? new(endpoint, key, relayWriterLease: Environment.GetEnvironmentVariable("VRS_RELAY_WRITER_LEASE_ENABLED") == "true") : null;
     }
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
@@ -147,7 +147,7 @@ public sealed class SupabaseAuthorityStore : IAuthorityStore
     private readonly string _secret;
     private readonly HttpClient _http;
 
-    public SupabaseAuthorityStore(Uri url, string secret, HttpClient? http = null)
+    public SupabaseAuthorityStore(Uri url, string secret, HttpClient? http = null, bool relayWriterLease = false)
     {
         if (url.Scheme != "https" && !url.IsLoopback)
             throw new ArgumentException("Server credentials require HTTPS.", nameof(url));
@@ -155,6 +155,7 @@ public sealed class SupabaseAuthorityStore : IAuthorityStore
         _url = new(url.AbsoluteUri.TrimEnd('/') + "/");
         _secret = secret;
         _http = http ?? new() { Timeout = TimeSpan.FromSeconds(4) };
+        SupportsRelayWriterLease = relayWriterLease;
     }
 
     public async Task<AuthorityStoredState?> LoadAsync(string sessionId, CancellationToken token)

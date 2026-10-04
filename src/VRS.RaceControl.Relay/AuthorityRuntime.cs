@@ -5,6 +5,16 @@ public sealed record AuthorityReadiness(bool Ready, TimeSpan DeliveryLead, strin
 
 public sealed partial class RelaySession
 {
+    private async Task RunRelayWriterRenewalAsync(CancellationToken token)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(token))
+                if (_authority is { } authority) await authority.RenewRelayWriterAsync(token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+    }
     private sealed record ClockReport(string Epoch, double UncertaintyMs, DateTimeOffset ReceivedAt);
     private readonly ConcurrentDictionary<string, ClockReport> _authorityClockReports = new();
     private readonly SemaphoreSlim _authorityRenewGate = new(1, 1);
@@ -17,9 +27,15 @@ public sealed partial class RelaySession
         var required = _clients.Values.Where(client => client.Role == "host" || HasAuthorityControl(client)).ToArray();
         if (required.Length == 0) return new(false, TimeSpan.FromMilliseconds(500), "No control operator is connected.");
         foreach (var client in required)
-            if (!_authorityClockReports.TryGetValue(client.Id, out var report) || report.Epoch != authority.ClockEpoch
-                || authority.Now - report.ReceivedAt > TimeSpan.FromSeconds(15) || report.UncertaintyMs > 50)
-                return new(false, TimeSpan.FromMilliseconds(500), "A control station needs clock resynchronization.");
+        {
+            string? problem = null;
+            if (!_authorityClockReports.TryGetValue(client.Id, out var report)) problem = "has not reported its clock yet";
+            else if (report.Epoch != authority.ClockEpoch) problem = "reported a clock for an earlier Relay epoch";
+            else if (authority.Now - report.ReceivedAt > TimeSpan.FromSeconds(15)) problem = "clock report is older than 15 s";
+            else if (report.UncertaintyMs > 50) problem = $"clock uncertainty {report.UncertaintyMs:0} ms exceeds 50 ms";
+            if (problem != null)
+                return new(false, TimeSpan.FromMilliseconds(500), $"A control station needs clock resynchronization: {client.Name} {problem}.");
+        }
         var leadMs = Math.Max(500, ObservedAuthorityDeliveryP99() + 2 * required.Max(c => _authorityClockReports[c.Id].UncertaintyMs));
         if (leadMs > 1500) return new(false, TimeSpan.FromMilliseconds(1500), "Recent delivery latency is too high to arm GREEN.");
         var lead = TimeSpan.FromMilliseconds(leadMs);

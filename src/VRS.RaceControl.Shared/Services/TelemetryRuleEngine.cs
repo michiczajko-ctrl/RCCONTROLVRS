@@ -70,21 +70,23 @@ public sealed class SpeedingTelemetryRule(bool pitLane) : ITelemetryRule
         if (period == null || (!pitLane && context.FcyActiveAt == null)) return output;
         var policy = context.Policy;
         var limit = pitLane ? policy.PitLimitKmh : policy.FcyLimitKmh;
+        // The grace period belongs to FCY activation (and to cars joining/reconnecting during FCY). Pit lane has none.
+        var grace = pitLane ? 0 : policy.GraceSeconds;
         foreach (var car in batch.Cars)
         {
             if (!_cars.TryGetValue(car.VehicleId, out var observation))
-                _cars[car.VehicleId] = observation = new(context.ReceivedAt.AddSeconds(policy.GraceSeconds));
+                _cars[car.VehicleId] = observation = new(context.ReceivedAt.AddSeconds(grace));
             if (observation.Identity != null && observation.Identity != (car.DriverName, car.CarModel))
             {
                 End(observation, output, "vehicle identity changed");
-                observation = new(context.ReceivedAt.AddSeconds(policy.GraceSeconds));
+                observation = new(context.ReceivedAt.AddSeconds(grace));
                 _cars[car.VehicleId] = observation;
             }
             observation.Identity = (car.DriverName, car.CarModel);
             if (car.SampleElapsedSeconds <= observation.LastElapsed)
             {
                 if ((context.ReceivedAt - observation.LastNewAt).TotalSeconds > policy.MaximumAgeSeconds)
-                { End(observation, output, "vehicle telemetry stale"); observation.GraceUntil = context.ReceivedAt.AddSeconds(policy.GraceSeconds); }
+                { End(observation, output, "vehicle telemetry stale"); observation.GraceUntil = context.ReceivedAt.AddSeconds(grace); }
                 continue;
             }
             var gap = car.SampleElapsedSeconds - observation.LastElapsed;
@@ -92,7 +94,7 @@ public sealed class SpeedingTelemetryRule(bool pitLane) : ITelemetryRule
             if (observation.LastElapsed >= 0 && gap > policy.MaximumGapSeconds)
             {
                 End(observation, output, "observation interrupted");
-                observation.GraceUntil = context.ReceivedAt.AddSeconds(policy.GraceSeconds);
+                observation.GraceUntil = context.ReceivedAt.AddSeconds(grace);
             }
             observation.LastElapsed = car.SampleElapsedSeconds;
             observation.LastNewAt = context.ReceivedAt;
@@ -127,7 +129,7 @@ public sealed class SpeedingTelemetryRule(bool pitLane) : ITelemetryRule
                 // Confirmation requires uninterrupted time strictly above tolerance.
                 observation.ClearCandidate();
             }
-            else if (car.SpeedKmh < limit + policy.ReleaseToleranceKmh)
+            else if (car.SpeedKmh < limit + Math.Min(policy.ReleaseToleranceKmh, policy.ToleranceKmh))
             {
                 observation.LastWasAbove = false;
                 observation.ReleaseElapsed ??= car.SampleElapsedSeconds;

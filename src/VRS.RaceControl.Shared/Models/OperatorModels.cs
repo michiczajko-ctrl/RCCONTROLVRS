@@ -53,6 +53,7 @@ public static class ProtocolCapabilities
     public const string SharedTrackDefinitions = "shared-track-definitions-v1";
     public const string DetailedTelemetry = "telemetry-detail-v1";
     public const string AtomicIncidentPenalty = "atomic-incident-penalty-v1";
+    public const string AdvancedTelemetryRules = "advanced-telemetry-rules-v1";
     public const string MultiHostOperators = "multi-host-v1";
     public const string LiveIncidents = "live-incidents-v1";
     public const string SessionStateV2 = "session-state-v2";

@@ -9,7 +9,7 @@ public sealed record TelemetryCar(
     bool? InPitLane, double? Throttle, double? Brake, double? Steering,
     double SampleElapsedSeconds, double LastImpactElapsedTime = 0,
     double LastImpactMagnitude = 0, IncidentVector3? ImpactPosition = null,
-    IReadOnlyList<double>? Damage = null)
+    IReadOnlyList<double>? Damage = null, bool? OffTrackConfirmed = null)
 {
     public double? Progress => TrackLengthMeters is > 0 && LapDistanceMeters is { } distance
         ? Math.Clamp(distance / TrackLengthMeters.Value, 0, 1) : null;
@@ -74,7 +74,9 @@ public sealed record SpeedingPolicy(double FcyLimitKmh = 60, double PitLimitKmh 
 {
     public bool IsValid => FcyLimitKmh is > 0 and <= 300 && PitLimitKmh is > 0 and <= 300
         && ToleranceKmh is >= 0 and <= 20 && GraceSeconds is >= 0 and <= 60
-        && MinimumSeconds is >= .2 and <= 30 && ReleaseToleranceKmh >= 0
-        && ReleaseToleranceKmh <= ToleranceKmh && ReleaseSeconds is >= .2 and <= 10
+        // 0 is allowed for tolerance, grace and minimum time. The release band is clamped to the tolerance where the
+        // rule is evaluated, so a zero tolerance no longer needs a zero release band to be accepted.
+        && MinimumSeconds is >= 0 and <= 30 && ReleaseToleranceKmh >= 0
+        && ReleaseSeconds is >= .2 and <= 10
         && MaximumGapSeconds is >= .1 and <= 2 && MaximumAgeSeconds is >= .1 and <= 5;
 }

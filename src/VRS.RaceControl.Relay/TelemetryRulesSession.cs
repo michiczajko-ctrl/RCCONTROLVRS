@@ -53,7 +53,9 @@ public sealed partial class RelaySession
                     RetainEvidence(_evidenceBuffer.Add(batch));
                     RetainRuleReports(engine.Process(batch, new(Code, state.FcyPeriodId, state.FcyActiveAt,
                         state.PolicyRevision, state.Policy, batch.ReceivedAt ?? _authority.Now,
-                        state.ImpactPolicy, state.ImpactPolicyRevision)));
+                        state.ImpactPolicy, state.ImpactPolicyRevision, state.AdvancedPolicy,
+                        state.AdvancedPolicyRevision, state.Panel.FlagState,
+                        state.Panel.FlashEpochHostTime, state.StandingStartArmedAt, state.StandingGrid)));
                 }
                 RetainRuleReports(engine.CheckStale(_authority.Now));
                 if (LatestFleet?.ReceivedAt is not { } last || _authority.Now - last > TimeSpan.FromMilliseconds(750))

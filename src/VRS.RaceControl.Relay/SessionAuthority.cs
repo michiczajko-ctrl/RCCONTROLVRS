@@ -8,6 +8,9 @@ using VRS.RaceControl.Shared.Services;
 
 public interface IAuthorityStore
 {
+    bool SupportsRelayWriterLease => false;
+    Task<bool> AcquireRelayWriterAsync(string sessionId, string clockEpoch, CancellationToken token) => Task.FromResult(true);
+    Task<bool> RenewRelayWriterAsync(string sessionId, string clockEpoch, CancellationToken token) => Task.FromResult(true);
     bool SupportsOperationHistory => false;
     bool SupportsPenaltyHistory => false;
     bool SupportsDeliveryHistory => false;
@@ -49,13 +52,16 @@ public sealed class SessionAuthority
     private AuthorityStoredState _stored;
     private bool _initialized;
     public bool StorageAvailable { get; private set; } = true;
-    public bool IsWriterActive => _initialized && StorageAvailable;
+    public bool IsWriterActive => _initialized && StorageAvailable && _writerLease.IsHeld;
+    private readonly RelayWriterLease _writerLease;
+    public Task RenewRelayWriterAsync(CancellationToken token) => _writerLease.RenewAsync(token);
     public string ClockEpoch { get; } = Guid.NewGuid().ToString("N");
 
     public SessionAuthority(string sessionId, string creatorId, IAuthorityStore store,
         Func<DateTimeOffset>? now = null, Func<TimeSpan>? greenDelay = null)
     {
         _store = store;
+        _writerLease = new(store, sessionId, ClockEpoch);
         var started = Stopwatch.GetTimestamp();
         var utc = DateTimeOffset.UtcNow;
         _now = now ?? (() => utc + Stopwatch.GetElapsedTime(started));
@@ -98,6 +104,7 @@ public sealed class SessionAuthority
         try
         {
             if (_initialized) return;
+            await _writerLease.AcquireAsync(token);
             var loaded = await _store.LoadAsync(_stored.State.SessionId, token);
             if (loaded != null)
             {
@@ -106,7 +113,8 @@ public sealed class SessionAuthority
                 var next = Clone(loaded) with { PendingGreen = null, PendingEvents = [],
                     State = Clone(loaded.State) with { Generation = loaded.State.Generation + 1,
                         Revision = loaded.State.Revision + 1, ControllerId = null, LeaseExpiresAt = null,
-                        ClockEpoch = ClockEpoch, ServerNow = Now, GreenArmed = false } };
+                        ClockEpoch = ClockEpoch, ServerNow = Now, GreenArmed = false,
+                        StandingStartArmedAt = null, StandingGrid = null } };
                 if (next.State.Panel.Transition?.TargetState == FlagType.Green)
                     next.State.Panel.Transition = null;
                 else if (next.State.Panel.Transition is { } restoredTransition)
@@ -118,6 +126,7 @@ public sealed class SessionAuthority
             }
             else if (!await _store.CompareExchangeAsync(null, _stored, _stored.State.ControllerId!, false, token))
                 throw new InvalidOperationException("Authority initialization conflicted.");
+            if (!_writerLease.IsHeld) throw new IOException("Relay writer lease expired during recovery.");
             _initialized = true;
         }
         finally { _gate.Release(); }
@@ -131,7 +140,7 @@ public sealed class SessionAuthority
         {
             if (!actorCanControl || !targetCanControl || string.IsNullOrWhiteSpace(request.TargetOperatorId))
                 return Reject(request.OperationId, "rejected", "Control permission required.");
-            if (!_initialized) return Reject(request.OperationId, "unavailable", "Authority not initialized.");
+            if (!_initialized || !_writerLease.IsHeld) return Reject(request.OperationId, "unavailable", "Relay writer is unavailable.");
             if (!StorageAvailable && !await RefreshDurableStateAsync(token))
                 return Reject(request.OperationId, "unavailable", "Durable state is unavailable; retry the same operation id.");
             var duplicate = await DuplicateAsync(request.OperationId, token);
@@ -148,7 +157,8 @@ public sealed class SessionAuthority
                 return Reject(request.OperationId, "conflict", "GREEN is already committed; wait for execution.");
             var next = Clone(_stored) with { PendingGreen = null,
                 State = Clone(_stored.State) with { ControllerId = request.TargetOperatorId,
-                    LeaseExpiresAt = Now.AddSeconds(8), Generation = _stored.State.Generation + 1 } };
+                    LeaseExpiresAt = Now.AddSeconds(8), Generation = _stored.State.Generation + 1,
+                    StandingStartArmedAt = null, StandingGrid = null } };
             return await CommitAsync(next, request.OperationId, actorId, false, null, token);
         }
         finally { _gate.Release(); }
@@ -172,7 +182,7 @@ public sealed class SessionAuthority
         await _gate.WaitAsync(token);
         try
         {
-            if (!_initialized || (!StorageAvailable && !await RefreshDurableStateAsync(token))
+            if (!_initialized || !_writerLease.IsHeld || (!StorageAvailable && !await RefreshDurableStateAsync(token))
                 || !HasLease || actorId != _stored.State.ControllerId) return false;
             var next = Clone(_stored) with { State = _stored.State with { LeaseExpiresAt = Now.AddSeconds(8) } };
             if (!await _store.CompareExchangeAsync(_stored, next, actorId, false, token))
@@ -192,7 +202,7 @@ public sealed class SessionAuthority
         await _gate.WaitAsync(token);
         try
         {
-            if (!_initialized) return Reject(request.OperationId, "unavailable", "Authority not initialized.");
+            if (!_initialized || !_writerLease.IsHeld) return Reject(request.OperationId, "unavailable", "Relay writer is unavailable.");
             if (!StorageAvailable && !await RefreshDurableStateAsync(token))
                 return Reject(request.OperationId, "unavailable", "Durable state is unavailable; retry the same operation id.");
             if (!canControl) return Reject(request.OperationId, "rejected", "Control permission required.");
@@ -259,6 +269,26 @@ public sealed class SessionAuthority
                     return Reject(request.OperationId, "rejected", "Layout confirmation requires the current measured track asset.");
                 next = next with { State = next.State with { TrackLayoutBinding = binding } };
             }
+            else if (request.Kind == "advanced-policy")
+            {
+                if (isPrivate) return Reject(request.OperationId, "rejected", "Rule policy is session-wide.");
+                var policy = request.Payload.Deserialize<AdvancedTelemetryPolicy>(Json);
+                if (policy?.IsValid != true) return Reject(request.OperationId, "rejected", "Invalid rule policy.");
+                next = next with { State = next.State with { AdvancedPolicy = policy,
+                    AdvancedPolicyRevision = next.State.AdvancedPolicyRevision + 1, StandingStartArmedAt = null, StandingGrid = null } };
+            }
+            else if (request.Kind is "standing-start.arm" or "standing-start.cancel")
+            {
+                if (isPrivate || (request.Kind == "standing-start.arm"
+                    && (next.State.AdvancedPolicy?.JumpStart != true || next.State.Panel.FlagState != FlagType.ReadyForGreen
+                        || next.State.StandingStartArmedAt != null || next.PendingGreen?.Committed == true)))
+                    return Reject(request.OperationId, "rejected", "Standing start requires enabled jump-start monitoring and READY FOR GREEN.");
+                var grid = request.Kind == "standing-start.arm" ? request.Payload.Deserialize<StandingStartGrid>(Json) : null;
+                if (request.Kind == "standing-start.arm" && grid?.IsValid != true)
+                    return Reject(request.OperationId, "rejected", "Standing start requires a Relay-captured stationary grid.");
+                next = next with { State = next.State with { StandingStartArmedAt =
+                    request.Kind == "standing-start.arm" ? Now : null, StandingGrid = grid } };
+            }
             else if (request.Kind == "impact-policy")
             {
                 if (isPrivate) return Reject(request.OperationId, "rejected", "Impact policy is session-wide.");
@@ -303,7 +333,8 @@ public sealed class SessionAuthority
                 next.State.Panel.FlashEpochHostTime = Now;
                 next.State.Panel.Transition = null;
                 next = next with { PendingGreen = null };
-                next = next with { State = next.State with { PrivatePanels = null } };
+                next = next with { State = next.State with { PrivatePanels = null,
+                    StandingStartArmedAt = null, StandingGrid = null } };
                 if (flag.FlagType == FlagType.FullCourseYellow)
                 {
                     var effectiveAt = Now.AddMilliseconds(8720);
@@ -438,8 +469,11 @@ public sealed class SessionAuthority
                 else if (quali.Phase != "Running") classes[index] = quali with { Phase = "Armed", EndsAt = null };
                 next.State.Panel.FastLaneActive = !code.StartsWith("QEND", StringComparison.Ordinal);
                 next.State.Panel.FastLaneState = code.StartsWith("FLOPEN", StringComparison.Ordinal) ? FastLaneState.Open : FastLaneState.Closed;
+                // Same exclusions as the automatic expiry in TickAsync: ending qualifying must not replace READY FOR GREEN
+                // or a transition that is already scheduled.
                 if (code.StartsWith("QEND", StringComparison.Ordinal) && next.State.Panel.FlagState
-                    is not (FlagType.Red or FlagType.FullCourseYellow or FlagType.SafetyCar or FlagType.VirtualSafetyCar))
+                    is not (FlagType.Red or FlagType.FullCourseYellow or FlagType.SafetyCar or FlagType.VirtualSafetyCar or FlagType.ReadyForGreen)
+                    && next.State.Panel.Transition == null)
                     next.State.Panel.FlagState = FlagType.Checkered;
                 next = next with { State = next.State with { Qualifying = classes } };
                 }
@@ -461,7 +495,7 @@ public sealed class SessionAuthority
         await _gate.WaitAsync(token);
         try
         {
-            if (!_initialized) return null;
+            if (!_initialized || !_writerLease.IsHeld) return null;
             if (!StorageAvailable && !await RefreshDurableStateAsync(token)) return null;
             var next = Clone(_stored);
             var changed = false;
@@ -548,6 +582,7 @@ public sealed class SessionAuthority
     // Called only under _gate. A different clock epoch belongs to another Relay writer.
     private async Task<bool> RefreshDurableStateAsync(CancellationToken token)
     {
+        if (!_writerLease.IsHeld) return false;
         try
         {
             var durable = await _store.LoadAsync(_stored.State.SessionId, token);
@@ -585,6 +620,9 @@ public sealed class SessionAuthority
         string actorId, bool system, ProtocolMessage? message, CancellationToken token,
         IReadOnlyList<ProtocolMessage>? additionalEvents = null)
     {
+        if (!_writerLease.IsHeld) return Reject(id, "unavailable", "Relay writer lease expired; restart and resync required.");
+        if (next.State.Panel.FlagState != FlagType.ReadyForGreen || next.State.ControllerId == null)
+            next = next with { State = next.State with { StandingStartArmedAt = null, StandingGrid = null } };
         next = next with { State = next.State with { Revision = _stored.State.Revision + 1,
             ServerNow = Now, ClockEpoch = ClockEpoch, GreenArmed = next.PendingGreen != null },
             OperationIds = (_store.SupportsOperationHistory ? _stored.OperationIds.TakeLast(255) : _stored.OperationIds).Append(id).ToArray() };

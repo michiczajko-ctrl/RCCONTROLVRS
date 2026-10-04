@@ -26,6 +26,16 @@ public sealed record AuthorityPenaltyCursor(DateTimeOffset CreatedAt, Guid Penal
 public sealed record AuthorityPenaltyPage(IReadOnlyList<PenaltyPayload> Penalties, AuthorityPenaltyCursor? NextCursor);
 public sealed record AuthorityPenaltyHistoryRequest(AuthorityPenaltyCursor? Cursor = null, Guid RequestId = default);
 public sealed record ScheduledGreen(Guid OperationId, DateTimeOffset TargetAt, bool Committed = false);
+public sealed record StandingGridCar(int VehicleId, string DriverName, string? CarModel, IncidentVector3 Position);
+public sealed record StandingStartGrid(string GameEpoch, string SourceEpoch, IReadOnlyList<StandingGridCar> Cars)
+{
+    public bool IsValid => !string.IsNullOrWhiteSpace(GameEpoch) && GameEpoch.Length <= 128
+        && !string.IsNullOrWhiteSpace(SourceEpoch) && SourceEpoch.Length <= 128 && Cars is { Count: > 0 and <= 104 }
+        && Cars.All(c => c != null && c.VehicleId >= 0 && !string.IsNullOrWhiteSpace(c.DriverName)
+            && c.DriverName.Length <= 200 && c.CarModel?.Length is not > 200 && c.Position != null
+            && double.IsFinite(c.Position.X) && double.IsFinite(c.Position.Y) && double.IsFinite(c.Position.Z))
+        && Cars.Select(c => c.VehicleId).Distinct().Count() == Cars.Count;
+}
 public sealed record SessionSnapshot(string SessionId, long Generation, long Revision,
     string? ControllerId, DateTimeOffset? LeaseExpiresAt, string ClockEpoch,
     DateTimeOffset ServerNow, RaceControlPanelStatePayload Panel,
@@ -36,7 +46,9 @@ public sealed record SessionSnapshot(string SessionId, long Generation, long Rev
     IReadOnlyDictionary<string, AuthorityText>? PrivateTexts = null,
     bool ManualMonitoring = false, bool GreenArmed = false, long PolicyRevision = 0,
     ImpactDetectionPolicy? ImpactPolicy = null, long ImpactPolicyRevision = 0,
-    TrackDefinitionReference? TrackDefinition = null, TrackLayoutBinding? TrackLayoutBinding = null);
+    TrackDefinitionReference? TrackDefinition = null, TrackLayoutBinding? TrackLayoutBinding = null,
+    AdvancedTelemetryPolicy? AdvancedPolicy = null, long AdvancedPolicyRevision = 0,
+    DateTimeOffset? StandingStartArmedAt = null, StandingStartGrid? StandingGrid = null);
 public sealed record AuthorityStoredState(SessionSnapshot State,
     ScheduledGreen? PendingGreen, IReadOnlyList<Guid> OperationIds,
     IReadOnlyList<AuthorityPendingEvent>? PendingEvents = null,

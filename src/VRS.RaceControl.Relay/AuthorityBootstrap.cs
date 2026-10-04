@@ -8,6 +8,7 @@ public sealed partial class RelaySession
     private readonly SemaphoreSlim _authorityBootstrapGate = new(1, 1);
     private CancellationTokenSource? _authorityRuntimeStop;
     private Task? _authorityRuntime;
+    private Task? _relayWriterRenewal;
     private Task? _authorityDeliveryWriter;
     private Task? _telemetryRulesWorker;
     private Task? _telemetryReportWriter;
@@ -43,6 +44,7 @@ public sealed partial class RelaySession
             await AttachAuthorityAsync(creator, store, token);
             _configuredAuthorityStore = store;
             _authorityRuntimeStop = CancellationTokenSource.CreateLinkedTokenSource(applicationStopping);
+            _relayWriterRenewal = RunRelayWriterRenewalAsync(_authorityRuntimeStop.Token);
             _authorityRuntime = RunAuthoritySchedulerAsync(_authorityRuntimeStop.Token);
             _authorityDeliveryWriter = RunAuthorityDeliveryWriterAsync(_authorityRuntimeStop.Token);
             _telemetryRulesWorker = RunTelemetryRulesAsync(_authorityRuntimeStop.Token);
@@ -105,6 +107,7 @@ public sealed partial class RelaySession
     {
         if (_authorityRuntimeStop == null) return;
         _authorityRuntimeStop.Cancel();
+        if (_relayWriterRenewal != null) await _relayWriterRenewal;
         if (_telemetryEvidenceWriter != null) await _telemetryEvidenceWriter;
         if (_telemetryRulesWorker != null) await _telemetryRulesWorker;
         if (_telemetryReportWriter != null) await _telemetryReportWriter;

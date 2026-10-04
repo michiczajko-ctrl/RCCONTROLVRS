@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text.RegularExpressions;
+using VRS.RaceControl.Shared.Services;
 
 namespace VRS.RaceControl.Shared.Diagnostics;
 
@@ -28,10 +29,7 @@ public sealed class RotatingFileLogger
         _logDirectory = logDirectory ?? LogDirectory;
     }
 
-    public static string LogDirectory { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "VRSRaceControl",
-        "logs");
+    public static string LogDirectory => LocalEnvironmentPaths.DataPath("logs");
 
     public string LogPath => Path.Combine(_logDirectory, $"{_component}.log");
 

@@ -6,6 +6,8 @@ using VRS.RaceControl.Shared.Services;
 public sealed partial class RelaySession
 {
     private SessionAuthority? _authority;
+    /// <summary>Optional trace sink: authority commands are logged with their operation id so HOST and Relay logs can be matched.</summary>
+    public Microsoft.Extensions.Logging.ILogger? Log { get; init; }
     private long _ingressDataDrops;
     public long IngressDataDrops => Interlocked.Read(ref _ingressDataDrops);
     public void RecordIngressDataDrop() => Interlocked.Increment(ref _ingressDataDrops);
@@ -126,6 +128,15 @@ public sealed partial class RelaySession
             if (command.Kind == "green.arm" && GetAuthorityReadiness() is { Ready: false } readiness)
                 preconditionError = readiness.Reason ?? "Clock readiness is degraded.";
             AuthorityRecipient? recipient = null;
+            if (command.Kind == "standing-start.arm" && (LatestFleet is not { FreshnessVerified: true } grid
+                || grid.Cars.Count == 0 || authority.Now - grid.CapturedAt > TimeSpan.FromMilliseconds(750)
+                || grid.Cars.Any(c => c.InPitLane != false || c.SpeedKmh > 1)))
+                preconditionError = "Standing start requires a fresh stationary grid outside pit lane.";
+            if (command.Kind == "standing-start.arm" && preconditionError == null && LatestFleet is { } stationaryGrid)
+                command = command with { Payload = System.Text.Json.JsonSerializer.SerializeToElement(
+                    new StandingStartGrid(stationaryGrid.GameEpoch, stationaryGrid.SourceEpoch,
+                        stationaryGrid.Cars.Select(c => new StandingGridCar(c.VehicleId, c.DriverName, c.CarModel, c.Position)).ToArray()),
+                    new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)) };
             if (command.Kind == "track.confirm-layout")
             {
                 TrackLayoutBinding? binding;
@@ -168,6 +179,8 @@ public sealed partial class RelaySession
             && penaltyCommand.Payload.ValueKind == System.Text.Json.JsonValueKind.Object
             && penaltyCommand.Payload.TryGetProperty("incidentCommit", out var linkedCommit) && linkedCommit.ValueKind == System.Text.Json.JsonValueKind.Object)
             Interlocked.Exchange(ref _incidentRefreshRequested, 1);
+        Log?.LogInformation("Authority {Type} op={Operation} result={Result} generation={Generation} revision={Revision} role={Role} session={Session}",
+            message.Type, outcome.Result.OperationId, outcome.Result.Result, outcome.Result.Generation, outcome.Result.Revision, client.Role, Code);
         if (outcome.Result.Committed) await PublishAuthorityOutcomeAsync(outcome, token);
         else await SendAuthoritySnapshotAsync(client, token);
         var result = ProtocolMessage.Create(MessageType.CommandResult, outcome.Result);
@@ -247,6 +260,7 @@ public sealed partial class RelaySession
         var dispatched = new HashSet<string>(StringComparer.Ordinal);
         foreach (var pending in _authority.PendingEvents)
         {
+            if (!_authority.IsWriterActive) return;
             if (pending.ExpiresAt <= _authority.Now) { dispatched.Add(pending.Message.Id); continue; }
             var message = pending.Message;
             var results = await Task.WhenAll(_clients.Values.Where(client =>

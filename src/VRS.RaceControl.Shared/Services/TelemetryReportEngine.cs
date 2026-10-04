@@ -18,7 +18,8 @@ public sealed class TelemetryReportEngine
     private DateTimeOffset? _lastReceived;
     private double _maximumAge = .75;
     public TelemetryReportEngine(IEnumerable<ITelemetryReportRule>? rules = null) =>
-        _rules = (rules ?? [new SpeedingReportRule(false), new SpeedingReportRule(true), new ImpactReportRule()]).ToArray();
+        _rules = (rules ?? [new SpeedingReportRule(false), new SpeedingReportRule(true), new ImpactReportRule(),
+            new AdvancedTelemetryReportRule()]).ToArray();
     public IReadOnlyList<IncidentReport> Process(TelemetryBatch batch, TelemetryRuleContext context)
     {
         if (batch.Validate() != null || batch.ControlSessionId != context.SessionId || !context.Policy.IsValid) return [];

@@ -23,7 +23,8 @@ public sealed class AuthorityProjection
         }
         var text = result.PrivateTexts?.TryGetValue(userId, out var privateText) == true
             && privateText.ExpiresAt > result.ServerNow ? privateText : result.ActiveText;
-        return result with { PrivatePanels = null, PrivateTexts = null, ActiveText = text };
+        return result with { PrivatePanels = null, PrivateTexts = null, ActiveText = text,
+            StandingGrid = null, StandingStartArmedAt = null };
     }
     private readonly object _gate = new();
     private readonly string _sessionId;
@@ -35,31 +36,54 @@ public sealed class AuthorityProjection
         JsonSerializer.Deserialize<SessionSnapshot>(JsonSerializer.Serialize(value, Json), Json)!;
     public SessionSnapshot? Current { get { lock (_gate) return _current == null ? null : Copy(_current); } }
 
+    /// <summary>Why the most recent snapshot was refused (null after an accepted one). Never contains session data.</summary>
+    public string? LastRejection { get; private set; }
+
+    /// <summary>The first failed structural check, by name, or null when the snapshot is well formed for this session.</summary>
+    private string? Invalid(SessionSnapshot snapshot)
+    {
+        if (snapshot.SessionId != _sessionId) return "session id differs from the joined session";
+        if (snapshot.Generation < 1) return "generation below 1";
+        if (snapshot.Revision < 0) return "negative revision";
+        if (string.IsNullOrWhiteSpace(snapshot.ClockEpoch) || snapshot.ClockEpoch.Length > 128) return "clock epoch missing or too long";
+        if (snapshot.ServerNow == default) return "server time missing";
+        if (snapshot.Panel == null) return "panel missing";
+        if (snapshot.Panel.Validate() is { } panelError) return "panel invalid: " + panelError;
+        if (string.IsNullOrWhiteSpace(snapshot.ControllerId) != !snapshot.LeaseExpiresAt.HasValue) return "controller and lease do not match";
+        if (snapshot.Panel.AuthorityGeneration != snapshot.Generation || snapshot.Panel.Revision != snapshot.Revision
+            || snapshot.Panel.ClockEpoch != snapshot.ClockEpoch || snapshot.Panel.EpochId != snapshot.ClockEpoch)
+            return "panel generation/revision/epoch stamp differs from the snapshot";
+        if (snapshot.Policy?.IsValid != true) return "speeding policy missing or invalid";
+        if (snapshot.PolicyRevision < 0) return "negative policy revision";
+        if (snapshot.Qualifying == null) return "qualifying list missing";
+        if (snapshot.ImpactPolicy?.IsValid == false || snapshot.ImpactPolicyRevision < 0) return "impact policy invalid";
+        if (snapshot.AdvancedPolicy?.IsValid == false || snapshot.AdvancedPolicyRevision < 0) return "advanced rule policy invalid";
+        if (snapshot.StandingGrid?.IsValid == false) return "standing grid invalid";
+        if (snapshot.StandingStartArmedAt.HasValue != (snapshot.StandingGrid != null)) return "standing start arm and grid do not match";
+        if (snapshot.TrackDefinition?.IsValid == false) return "track definition reference invalid";
+        if (snapshot.TrackLayoutBinding?.IsValid == false) return "track layout binding invalid";
+        if (snapshot.TrackLayoutBinding != null && snapshot.TrackLayoutBinding.Checksum != snapshot.TrackDefinition?.Checksum)
+            return "track layout binding does not match the track definition";
+        if (snapshot.Qualifying.Count != 2 || snapshot.Qualifying.Any(q => q == null)) return "qualifying must list exactly two classes";
+        if (snapshot.Qualifying.Select(q => q.RaceClass).Distinct().Count() != 2) return "qualifying classes are not distinct";
+        if (snapshot.Qualifying.Any(q => q.RaceClass is not ("GT3" or "HYPERCAR")))
+            return "qualifying class name not GT3/HYPERCAR: " + string.Join("/", snapshot.Qualifying.Select(q => q.RaceClass));
+        if (snapshot.Qualifying.Any(q => q.Phase is not ("Inactive" or "Armed" or "Running" or "Ended")))
+            return "qualifying phase not recognised: " + string.Join("/", snapshot.Qualifying.Select(q => q.Phase));
+        if (snapshot.Qualifying.Any(q => (q.Phase == "Running") != q.EndsAt.HasValue)) return "qualifying end time does not match its phase";
+        if (snapshot.Qualifying.Any(q => q.DurationSeconds is < 1 or > 86400)) return "qualifying duration out of range";
+        return null;
+    }
+
     public bool TryApply(SessionSnapshot snapshot)
     {
-        if (snapshot.SessionId != _sessionId || snapshot.Generation < 1 || snapshot.Revision < 0
-            || string.IsNullOrWhiteSpace(snapshot.ClockEpoch) || snapshot.ClockEpoch.Length > 128
-            || snapshot.ServerNow == default || snapshot.Panel == null || snapshot.Panel.Validate() != null
-            || string.IsNullOrWhiteSpace(snapshot.ControllerId) != !snapshot.LeaseExpiresAt.HasValue
-            || snapshot.Panel.AuthorityGeneration != snapshot.Generation || snapshot.Panel.Revision != snapshot.Revision
-            || snapshot.Panel.ClockEpoch != snapshot.ClockEpoch || snapshot.Panel.EpochId != snapshot.ClockEpoch
-            || snapshot.Policy?.IsValid != true || snapshot.PolicyRevision < 0 || snapshot.Qualifying == null
-            || snapshot.ImpactPolicy?.IsValid == false || snapshot.ImpactPolicyRevision < 0
-            || snapshot.TrackDefinition?.IsValid == false
-            || snapshot.TrackLayoutBinding?.IsValid == false
-            || (snapshot.TrackLayoutBinding != null && snapshot.TrackLayoutBinding.Checksum != snapshot.TrackDefinition?.Checksum)
-            || snapshot.Qualifying.Count != 2 || snapshot.Qualifying.Any(q => q == null)
-            || snapshot.Qualifying.Select(q => q.RaceClass).Distinct().Count() != 2
-            || snapshot.Qualifying.Any(q => q.RaceClass is not ("GT3" or "HYPERCAR")
-                || q.Phase is not ("Inactive" or "Armed" or "Running" or "Ended")
-                || (q.Phase == "Running") != q.EndsAt.HasValue || q.DurationSeconds is < 1 or > 86400))
-            return false;
+        if (Invalid(snapshot) is { } invalid) { LastRejection = invalid; return false; }
         lock (_gate)
         {
             if (_current != null && (snapshot.Generation < _current.Generation
                 || snapshot.Revision < _current.Revision
                 || (snapshot.ClockEpoch != _current.ClockEpoch && snapshot.Generation <= _current.Generation)))
-                return false;
+            { LastRejection = "older than the state already applied"; return false; }
             // Equal revisions can renew the lease and refresh server time, but cannot rewrite domain state.
             if (_current != null && snapshot.Revision == _current.Revision
                 && JsonSerializer.Serialize(snapshot with { LeaseExpiresAt = _current.LeaseExpiresAt,
@@ -68,11 +92,13 @@ public sealed class AuthorityProjection
                 // Panel.HostNow is also a presentation timestamp refreshed in snapshots.
                 var normalized = Copy(snapshot with { LeaseExpiresAt = _current.LeaseExpiresAt, ServerNow = _current.ServerNow });
                 normalized.Panel.HostNow = _current.Panel.HostNow;
-                if (JsonSerializer.Serialize(normalized, Json) != JsonSerializer.Serialize(_current, Json)) return false;
+                if (JsonSerializer.Serialize(normalized, Json) != JsonSerializer.Serialize(_current, Json))
+                { LastRejection = "same revision but the state differs from the one already applied"; return false; }
             }
             if (_current != null && snapshot.Revision == _current.Revision && snapshot.ServerNow < _current.ServerNow)
-                return false;
+            { LastRejection = "same revision with an older server time"; return false; }
             _current = Copy(snapshot);
+            LastRejection = null;
             return true;
         }
     }

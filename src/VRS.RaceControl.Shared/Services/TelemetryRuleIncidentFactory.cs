@@ -15,7 +15,7 @@ public static class TelemetryRuleIncidentFactory
         TrackPositionNormalized = rule.Car.Progress, WorldPosition = rule.Car.Position,
         SessionTimeSeconds = rule.Car.SampleElapsedSeconds, DetectedAtUtc = rule.StartedAt.UtcDateTime,
         CreatedAtUtc = rule.StartedAt.UtcDateTime, UpdatedAtUtc = rule.LastObservedAt.UtcDateTime,
-        IncidentType = rule.RuleId == "FCY_SPEEDING" ? IncidentType.SpeedingUnderNeutralization : IncidentType.PitLaneInfringement,
+        IncidentType = rule.RuleId is "FCY_SPEEDING" or "SC_SPEEDING" ? IncidentType.SpeedingUnderNeutralization : IncidentType.PitLaneInfringement,
         CorrelationKey = $"{rule.RuleId}:{rule.GameEpoch}:{rule.SourceEpoch}:{rule.PeriodId}:{rule.VehicleId}:{rule.Id}",
         SourceReportIds = [rule.Id],
         Description = string.Create(CultureInfo.InvariantCulture,
