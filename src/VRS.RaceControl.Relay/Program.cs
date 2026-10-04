@@ -90,6 +90,7 @@ app.MapGet("/", async (Microsoft.AspNetCore.Http.HttpContext context) =>
             ProtocolCapabilities.DurableIncidentCases }
         : new[] { ProtocolCapabilities.MultiHostOperators, ProtocolCapabilities.LiveIncidents,
             ProtocolCapabilities.SessionStateV2, ProtocolCapabilities.MultiHostV2 })
+        // Driver track upload is no longer offered: only the HOST sets the track map, so older CLIENTs must not try to send one.
         .Concat(new[] { ProtocolCapabilities.FleetTelemetry })
         .Concat(authorityEnabled && authorityStore?.SchemaReady == true && durableRepository.IsEnabled && incidentRepository.IsEnabled
             ? new[] { ProtocolCapabilities.SessionAuthority, ProtocolCapabilities.ScheduledPanelAudio,
@@ -395,6 +396,8 @@ app.Map("/vrs", async context =>
             supportsMultiHostV2,
             supportsDurableCases) { SupportsFleetTelemetry = joinPayload.Capabilities?.Contains(
                 ProtocolCapabilities.FleetTelemetry, StringComparer.Ordinal) == true,
+                SupportsDriverTrackUpload = joinPayload.Capabilities?.Contains(
+                    ProtocolCapabilities.DriverTrackUpload, StringComparer.Ordinal) == true,
                 SupportsAuthority = session.RequiresAuthority };
 
         if (!session.TryAddClient(client, out var rejectionReason, out var rejectionRetryable, out var rejectionCode))
@@ -520,6 +523,8 @@ app.Map("/vrs", async context =>
             }
             else if (client.Role == "driver")
             {
+                // A track line is about 100 KB: let one through per driver every 30 s, drop the rest quietly.
+                if (message.Type == MessageType.DriverTrackUpload && !session.AdmitDriverTrackUpload(client)) continue;
                 await session.SendToHostAsync(message, context.RequestAborted);
             }
             else if (RelayRoles.IsSecondaryOperator(client.Role))
@@ -849,6 +854,7 @@ public sealed class RelayClient : IDisposable
     public bool SupportsMultiHostV2 { get; }
     public bool SupportsDurableIncidents { get; }
     public bool SupportsFleetTelemetry { get; init; }
+    public bool SupportsDriverTrackUpload { get; init; }
     public bool SupportsAuthority { get; init; }
     public DateTime LastSeenUtc { get; private set; } = DateTime.UtcNow;
 

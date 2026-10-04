@@ -15,7 +15,7 @@ public sealed class TrackGeometry
     }
     public (double X, double Y) Project(double worldX, double worldZ, double width, double height)
     {
-        var scale = Math.Max(.001, Math.Min(Math.Max(1, width - 40) / Width, Math.Max(1, height - 40) / Height));
+        var scale = Math.Max(.001, Math.Min(Math.Max(1, width - 100) / Width, Math.Max(1, height - 70) / Height));
         return ((worldX - MinX) * scale + (width - Width * scale) / 2,
             (worldZ - MinZ) * scale + (height - Height * scale) / 2);
     }

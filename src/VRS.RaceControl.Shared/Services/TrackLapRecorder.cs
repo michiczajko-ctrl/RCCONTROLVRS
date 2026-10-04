@@ -39,7 +39,7 @@ public sealed class TrackLapRecorder(int vehicleId, string confirmedLayoutId)
                 _points.ToArray(), _sectors.Select(s => new TrackSectorBoundary(s.Key, s.Value)).OrderBy(s => s.StartsAtMeters).ToArray(), [],
                 $"LMU telemetry vehicle {vehicleId}; game {batch.GameEpoch}; source {batch.SourceEpoch}");
             if (candidate.Validate() is { } error) { Reset(error); _previousLap = car.Lap; return; }
-            Completed = candidate; Status = "Lap recorded. Verify layout and geometry before live use."; return;
+            Completed = candidate; Status = "Lap recorded. Press SAVE MAP to keep it."; return;
         }
         if (_recordedLap == null && _previousLap != null && car.Lap == _previousLap + 1 && distance < 100)
         { _recordedLap = car.Lap; _length = car.TrackLengthMeters.Value; _sectors[1] = 0; }

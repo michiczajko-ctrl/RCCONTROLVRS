@@ -238,5 +238,7 @@ public enum MessageType
     AuthorityDeliveryStatus,
     AuthorityPlaybackReceipt,
     TrackDefinitionRequest,
-    TrackDefinitionPage
+    TrackDefinitionPage,
+    DriverTrackUpload,
+    DriverTrackUploadAck
 }

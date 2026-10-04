@@ -54,6 +54,8 @@ public static class ProtocolCapabilities
     public const string DetailedTelemetry = "telemetry-detail-v1";
     public const string AtomicIncidentPenalty = "atomic-incident-penalty-v1";
     public const string AdvancedTelemetryRules = "advanced-telemetry-rules-v1";
+    /// <summary>A driver may send its measured track line to the HOST. Old relays disconnect on unknown message types, so clients only send it when the join reply lists this.</summary>
+    public const string DriverTrackUpload = "driver-track-upload-v1";
     public const string MultiHostOperators = "multi-host-v1";
     public const string LiveIncidents = "live-incidents-v1";
     public const string SessionStateV2 = "session-state-v2";

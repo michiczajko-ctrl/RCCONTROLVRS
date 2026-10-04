@@ -18,3 +18,7 @@ public sealed record TrackDefinitionReference(string Checksum, string Simulator,
 public sealed record TrackDefinitionRequest(Guid RequestId, string Checksum, int Offset = 0);
 public sealed record TrackDefinitionPage(Guid RequestId, string Checksum, TrackDefinition? Definition,
     int? NextOffset, string? Error = null);
+
+/// <summary>A driver's measured track line for the HOST to adopt. The HOST never trusts the flags inside it.</summary>
+public sealed record DriverTrackUploadPayload(Guid UploadId, string SessionId, string Checksum, TrackDefinition Definition);
+public sealed record DriverTrackUploadAckPayload(Guid UploadId, string Checksum, bool Accepted, bool Adopted, string? Reason);
