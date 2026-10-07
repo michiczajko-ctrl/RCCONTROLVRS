@@ -12,6 +12,11 @@ namespace VRS.RaceControl.Shared.Services;
 public static class TrackDefinitionStore
 {
     public static string DirectoryPath => LocalEnvironmentPaths.DataPath("track-definitions");
+    /// <summary>
+    /// Maps built by a driver's CLIENT. Kept apart from <see cref="DirectoryPath"/> so a map a driver measured on a PC that also runs HOST can
+    /// never be auto-loaded, published to a session or shared to the track library as the HOST's own map ("only the HOST sets the map").
+    /// </summary>
+    public static string ClientDirectoryPath => LocalEnvironmentPaths.DataPath("client-track-definitions");
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
     public static TrackDefinition Import(string path)
@@ -55,6 +60,13 @@ public static class TrackDefinitionStore
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException) { return null; }
     }
+
+    /// <summary>The CLIENT's lookup: its own folder first, then the shared folder (read only, for maps that were saved there before the folders were split).</summary>
+    public static TrackDefinition? FindForClient(string simulator, string track, string layout, string? clientDirectory = null, string? sharedDirectory = null) =>
+        Find(simulator, track, layout, clientDirectory ?? ClientDirectoryPath) ?? Find(simulator, track, layout, sharedDirectory);
+
+    /// <summary>The CLIENT saves only into its own folder.</summary>
+    public static void SaveForClient(TrackDefinition definition, string? clientDirectory = null) => Save(definition, clientDirectory ?? ClientDirectoryPath);
 
     /// <summary>Every valid saved map, newest first. Unreadable or invalid files are skipped, so a damaged file never breaks the list.</summary>
     public static IReadOnlyList<TrackDefinition> ListSaved(string? directory = null)

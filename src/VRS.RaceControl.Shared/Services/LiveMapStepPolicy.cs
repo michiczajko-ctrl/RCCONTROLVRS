@@ -32,3 +32,21 @@ public static class LiveMapStepPolicy
         return map.Verified ? LiveMapStep.Ready : LiveMapStep.NeedsSave;
     }
 }
+
+/// <summary>What the map screen does with the map already on screen when the operator picks a track and layout from the lists.</summary>
+public static class MapPickPolicy
+{
+    /// <summary>
+    /// True when the map on screen must come down because the operator picked another track or layout that has no saved map. Picking only
+    /// chooses what LOAD MAP would load; leaving the old map up under the new choice made "Monza Curva Grande" show the Monza GP map.
+    /// The live map stays while LMU is on a track (the operator is only browsing) and while a lap is being recorded.
+    /// </summary>
+    public static bool ShouldClearShownMap(bool operatorPicked, bool pickedHasSavedMap, string? shownMapTrackId, string? pickedGameName,
+        bool gameOnTrack, bool recording)
+    {
+        if (!operatorPicked || pickedHasSavedMap || recording || gameOnTrack || string.IsNullOrWhiteSpace(shownMapTrackId)) return false;
+        // A layout whose in-game name is not known yet (pickedGameName null) cannot be the shown map's layout.
+        return string.IsNullOrWhiteSpace(pickedGameName)
+            || LmuTrackCatalog.Normalize(shownMapTrackId) != LmuTrackCatalog.Normalize(pickedGameName);
+    }
+}

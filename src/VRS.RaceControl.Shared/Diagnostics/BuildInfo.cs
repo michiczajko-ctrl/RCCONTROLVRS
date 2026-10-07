@@ -8,7 +8,7 @@ public static class BuildInfo
     {
         get
         {
-            var version = typeof(BuildInfo).Assembly.GetName().Version ?? new Version(1, 1, 2, 0);
+            var version = typeof(BuildInfo).Assembly.GetName().Version ?? new Version(1, 2, 1, 0);
             return version.ToString(3);
         }
     }
@@ -17,5 +17,5 @@ public static class BuildInfo
         typeof(BuildInfo).Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
             ?.InformationalVersion
-        ?? "1.1.2";
+        ?? "1.2.2";
 }
